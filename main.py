@@ -50,19 +50,19 @@ BOILER_TANK_LIMIT_LO    = Pin(10,Pin.IN, Pin.PULL_UP)  # Input from BOILER_TANK_
 RESERVOIR_TANK_LIMIT_HI = Pin(12,Pin.IN, Pin.PULL_UP)  # Input from ReservoirTank_T
 RESERVOIR_TANK_LIMIT_LO = Pin(13,Pin.IN, Pin.PULL_UP)   # Input from ReservoirTank_B
 CALIBRATE_TDS_OFFSET    = Pin(2,Pin.IN, Pin.PULL_UP)   # Input from ReservoirTank_B
-WATER_FLOW_SW           = Pin(28,Pin.IN, Pin.PULL_UP)   # Output to BiolerStirilization switch
-BOILER_REFILL_VALVE     = Pin(18,Pin.OPEN_DRAIN)   # Output to BOILER_REFILL_VALVE
-BOILER_WATER_VALVE      = Pin(19,Pin.OPEN_DRAIN)   # Output to BOILER_DRAIN_VALVE and Pump
-BOILER_DRAIN_VALVE      = Pin(21,Pin.OPEN_DRAIN)   # Output to BOILER_DRAIN_VALVE and Pump
+WATER_FLOW_SW           = Pin(28,Pin.IN, Pin.PULL_UP)   # 
+BOILER_REFILL_VALVE     = Pin(18,Pin.OPEN_DRAIN)   # Output to SOLENOID_BOILER_REFILL_VALVE
+BOILER_WATER_VALVE      = Pin(19,Pin.OPEN_DRAIN)   # Output to BOILER_MAIN_WATER_VALVE
+#BOILER_DRAIN_VALVE      = Pin(21,Pin.OPEN_DRAIN)   # Output to BOILER_DRAIN_VALVE and Pump
 BOILER_POWER            = Pin(16,Pin.OUT,Pin.PULL_DOWN)   # Output to BiolerPower switch
-COOLING_FAN             = Pin(17,Pin.OUT,Pin.PULL_DOWN)   # Output to BiolerStirilization switch
+#COOLING_FAN             = Pin(17,Pin.OUT,Pin.PULL_DOWN)   # Output to BiolerStirilization switch
 
 # Setup pin 0:3 as an output that's at a high logic level default
 BOILER_REFILL_VALVE.value(True)
-BOILER_DRAIN_VALVE.value(True)# NOT USED
+#BOILER_DRAIN_VALVE.value(True)# NOT USED
 BOILER_WATER_VALVE.value(True)
 BOILER_POWER.value(False)
-COOLING_FAN.value(True)
+#COOLING_FAN.value(True)
 
 #BUFF_SIZE = 30  # Buffer size for median filtering
 

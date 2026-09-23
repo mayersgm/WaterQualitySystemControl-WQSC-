@@ -4,24 +4,20 @@
     "python.analysis.typeCheckingMode": "basic",
     "micropico.syncFolder": "",
     "python.analysis.typeshedPaths": [
-        ".vscode/Pico-W-Stub"
+        ".vscode/Pico-W-Stub",
+        "~/.micropico-stubs/included"
     ],
     "python.analysis.extraPaths": [
         "",
         "/Users/godwinm.mayers/.vscode/extensions/joedevivo.vscode-circuitpython-0.2.0-darwin-x64/stubs",
-        "/Users/godwinm.mayers/Library/Application Support/Code/User/globalStorage/joedevivo.vscode-circuitpython/bundle/20240625/adafruit-circuitpython-bundle-py-20240625/lib"
+        "/Users/godwinm.mayers/Library/Application Support/Code/User/globalStorage/joedevivo.vscode-circuitpython/bundle/20240625/adafruit-circuitpython-bundle-py-20240625/lib",
+        "~/.micropico-stubs/included"
     ],
-    "micropico.openOnStart": false,
+    "micropico.openOnStart": true,
     "python.analysis.diagnosticSeverityOverrides": {
         "reportMissingModuleSource": "none",
         "reportShadowedImports": "none"
     },
     "circuitpython.board.version": null,
-    "python-envs.pythonProjects": [
-        {
-            "path": ".",
-            "envManager": "ms-python.python:system",
-            "packageManager": "ms-python.python:pip"
-        }
-    ]
+    "python.terminal.activateEnvironment": false
 }
