@@ -5,6 +5,7 @@ from machine import Pin, UART
 
 from scale import Scale
 from sensors import Thermistor, TDSSensor
+from limits import Limits
 
 # ---------------------------------------------------------------------------
 # Pin map — see Phase0_Design.md
@@ -63,20 +64,26 @@ for _pin in (MAIN_VALVE, REFILL_VALVE, TRANSFER_VALVE, BOILER_RELAY):
 # Weight thresholds, grams post-tare — see Phase0_Design.md sec 3
 # ---------------------------------------------------------------------------
 BOILER_CAPACITY_G = 3785
-# BENCH TEST THRESHOLDS (only ~1-2kg of reference weight available) -- revert
-# every value marked "prod:" to the production number before Phase 6.
-BOILER_TOPOFF_G = 300          # prod: 3200 -- refill turns on below this (covers cold-start empty too)
-BOILER_FULL_G = 600            # prod: 3600 -- refill turns off at/above this
-BOILER_OVERFLOW_G = 900        # prod: 3700 -- hard safety cutoff, above the normal FULL target
-REFILL_TIMEOUT_S = 90          # BENCH TEST VALUE (10 for the step-6 timeout test) -- revert to 300 before real deployment (Phase 6)
-
 COLLECTOR_CAPACITY_G = 7570
-COLLECTOR_EMPTY_G = 100        # prod: 300
-COLLECTOR_FULL_G = 500         # prod: 7200
-
 RESERVOIR_CAPACITY_G = 34065
-RESERVOIR_FULL_G = 800         # prod: 32000
-RESERVOIR_TRANSFER_LOW_G = 400   # prod: 30000 -- "under capacity" trigger to start a transfer
+
+# Fixed safety limits -- NOT operator-adjustable.
+# BENCH TEST VALUES (only ~1-2kg of reference weight available) -- revert
+# every value marked "prod:" to the production number before Phase 6.
+BOILER_OVERFLOW_G = 900        # prod: 3700 -- hard safety cutoff, above any FULL setpoint
+DRY_TANK_FLOOR_G = 200         # heater never runs below this boiler weight
+REFILL_TIMEOUT_S = 90          # prod: 300 (10 for the step-6 timeout test)
+
+# Default fill/drain setpoints, used until the operator changes them from the
+# HMI (SET:...), which persists them to limits.json -- see limits.py.
+DEFAULT_LIMITS = {
+    "boiler_topoff": 300,      # prod: 3200 -- refill turns on below this (covers cold-start empty too)
+    "boiler_full": 600,        # prod: 3600 -- refill turns off at/above this
+    "collector_empty": 100,    # prod: 300
+    "collector_full": 500,     # prod: 7200
+    "reservoir_low": 400,      # prod: 30000 -- "under capacity" trigger to start a transfer
+    "reservoir_full": 800,     # prod: 32000
+}
 
 TDS_FAULT_PPM = 50             # carried over from old system's contamination threshold
 
@@ -125,9 +132,17 @@ class Wqcs:
         self.tds1 = TDSSensor("tds1", adc_pin=27)   # distiller -> collector
         self.tds2 = TDSSensor("tds2", adc_pin=28)   # distribution pump outlet
 
+        self.limits = Limits(
+            DEFAULT_LIMITS, BOILER_OVERFLOW_G, DRY_TANK_FLOOR_G,
+            {"collector": COLLECTOR_CAPACITY_G, "reservoir": RESERVOIR_CAPACITY_G},
+        )
+
         self.cmd = CMD_STOP     # safe default until the operator sends START
         self._pending = []
         self._pending_lock = _thread.allocate_lock()
+        # One-off reply lines (e.g. limits) queued by core 0 for core 1 to send
+        self._outbox = []
+        self._outbox_lock = _thread.allocate_lock()
 
         self.heater_on = False
         self.refill_open = False
@@ -201,6 +216,34 @@ class Wqcs:
             self.fault_refill_timeout = False
             self.fault_valve_stuck = False
 
+        # SET:<KEY>:<g>  or atomically  SET:<KEY>=<g>,<KEY>=<g>,...
+        elif verb == "SET" and len(parts) in (2, 3):
+            try:
+                if len(parts) == 3:
+                    changes = {parts[1].lower(): float(parts[2])}
+                else:
+                    changes = {}
+                    for item in parts[1].split(","):
+                        k, v = item.split("=")
+                        changes[k.strip().lower()] = float(v)
+                err = self.limits.update(changes)
+            except ValueError:
+                err = "malformed SET"
+            self._reply_limits(err)
+
+        elif verb == "GET" and len(parts) == 2 and parts[1] == "LIMITS":
+            self._reply_limits(None)
+
+        elif verb == "RESET_LIMITS":
+            self.limits.reset()
+            self._reply_limits(None)
+
+    def _reply_limits(self, err):
+        msg = {"limits": self.limits.values, "ok": err is None, "err": err}
+        print(msg)
+        with self._outbox_lock:
+            self._outbox.append(json.dumps(msg).encode() + b"\n")
+
     # -- main control loop (core 0) ------------------------------------------
     def run(self):
         _thread.start_new_thread(self._uart_thread, ())
@@ -239,12 +282,13 @@ class Wqcs:
 
         # ---- debounced condition checks ------------------------------------
         boiler_overflow = self._db_boiler_overflow.check(boiler_g >= BOILER_OVERFLOW_G)
-        boiler_full = self._db_boiler_full.check(boiler_g >= BOILER_FULL_G)
-        boiler_topoff = self._db_boiler_topoff.check(boiler_g < BOILER_TOPOFF_G)
-        collector_full = self._db_collector_full.check(collector_g >= COLLECTOR_FULL_G)
-        collector_empty = self._db_collector_empty.check(collector_g <= COLLECTOR_EMPTY_G)
-        reservoir_full = self._db_reservoir_full.check(reservoir_g >= RESERVOIR_FULL_G)
-        reservoir_low = self._db_reservoir_low.check(reservoir_g < RESERVOIR_TRANSFER_LOW_G)
+        lim = self.limits
+        boiler_full = self._db_boiler_full.check(boiler_g >= lim["boiler_full"])
+        boiler_topoff = self._db_boiler_topoff.check(boiler_g < lim["boiler_topoff"])
+        collector_full = self._db_collector_full.check(collector_g >= lim["collector_full"])
+        collector_empty = self._db_collector_empty.check(collector_g <= lim["collector_empty"])
+        reservoir_full = self._db_reservoir_full.check(reservoir_g >= lim["reservoir_full"])
+        reservoir_low = self._db_reservoir_low.check(reservoir_g < lim["reservoir_low"])
         tds1_bad = self._db_tds1_fault.check(tds1_ppm >= TDS_FAULT_PPM)
         tds2_bad = self._db_tds2_alert.check(tds2_ppm >= TDS_FAULT_PPM)
 
@@ -306,7 +350,7 @@ class Wqcs:
             and not self.fault_overflow
             and not self.fault_refill_timeout
             and not self.fault_valve_stuck
-            and boiler_g >= 200
+            and boiler_g >= DRY_TANK_FLOOR_G
         )
         BOILER_RELAY.value(1 if self.heater_on else 0)
 
@@ -340,9 +384,6 @@ class Wqcs:
             "boiler_g": round(boiler_g, 1),
             "collector_g": round(collector_g, 1),
             "reservoir_g": round(reservoir_g, 1),
-            "boiler_pct": round(boiler_g / BOILER_CAPACITY_G * 100, 1),
-            "collector_pct": round(collector_g / COLLECTOR_CAPACITY_G * 100, 1),
-            "reservoir_pct": round(reservoir_g / RESERVOIR_CAPACITY_G * 100, 1),
             "valves": {
                 "main": MAIN_VALVE.value(),
                 "refill": REFILL_VALVE.value(),
@@ -366,7 +407,11 @@ class Wqcs:
 
     # -- UART link to ESP32-S3 (core 1) --------------------------------------
     def _uart_thread(self):
-        uart = UART(UART_ID, baudrate=UART_BAUD, tx=Pin(UART_TX_PIN), rx=Pin(UART_RX_PIN))
+        # txbuf must exceed one status line: rp2's uart.write() queues only
+        # what fits in the TX ring buffer (default 256B + 32B FIFO) and
+        # silently drops the rest, which truncated every ~400B status line.
+        uart = UART(UART_ID, baudrate=UART_BAUD, tx=Pin(UART_TX_PIN), rx=Pin(UART_RX_PIN),
+                    txbuf=1024, rxbuf=256)
         buf = b""
         last_status_send = time.ticks_ms()
         while True:
@@ -379,13 +424,27 @@ class Wqcs:
                     except UnicodeError:
                         pass
 
+            with self._outbox_lock:
+                replies, self._outbox = self._outbox, []
+            for line in replies:
+                self._write_all(uart, line)
+
             now = time.ticks_ms()
             if time.ticks_diff(now, last_status_send) >= 1000:
                 if self.last_status:
-                    uart.write(json.dumps(self.last_status).encode() + b"\n")
+                    self._write_all(uart, json.dumps(self.last_status).encode() + b"\n")
                 last_status_send = now
 
             time.sleep_ms(50)
+
+    @staticmethod
+    def _write_all(uart, data):
+        mv = memoryview(data)
+        while mv:
+            n = uart.write(mv) or 0
+            mv = mv[n:]
+            if not n:
+                time.sleep_ms(5)
 
 
 if __name__ == "__main__":

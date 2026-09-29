@@ -18,6 +18,7 @@ poll.register(sys.stdin, select.POLLIN)
 print("WQCS bench console ready. Type a command and press Enter:")
 print("  START | STOP | STERILIZE | EMPTY | RESET | ACK")
 print("  TARE:BOILER | CAL:BOILER:<grams>  (also COLLECTOR / RESERVOIR)")
+print("  GET:LIMITS | RESET_LIMITS | SET:BOILER_FULL:<g> | SET:BOILER_TOPOFF=<g>,BOILER_FULL=<g>")
 
 input_line = ""
 reported_errors = 0
@@ -46,6 +47,9 @@ while True:
     status = link.poll()
     if status is not None:
         print("<-", status)
+    if link.last_limits is not None:
+        print("<- LIMITS", link.last_limits)
+        link.last_limits = None
     if link.link_errors != reported_errors:
         reported_errors = link.link_errors
         print("!! link_errors:", reported_errors, "last_bad_line:", link.last_bad_line)

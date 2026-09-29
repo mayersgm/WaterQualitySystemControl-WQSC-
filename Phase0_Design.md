@@ -90,19 +90,48 @@ START | STOP | STERILIZE | EMPTY | RESET
 TARE:BOILER | TARE:COLLECTOR | TARE:RESERVOIR
 CAL:BOILER:<grams> | CAL:COLLECTOR:<grams> | CAL:RESERVOIR:<grams>
 ACK        # clears a recoverable fault (tds1 / overflow / refill_timeout / valve_stuck)
+GET:LIMITS                         # request the current water-level setpoints
+SET:<KEY>:<grams>                  # change one setpoint, e.g. SET:BOILER_FULL:3400
+SET:<KEY>=<g>,<KEY>=<g>,...        # change several atomically (validated as a set)
+RESET_LIMITS                       # restore default setpoints
 ```
+Adjustable keys (`Pico/limits.py`): `BOILER_TOPOFF`, `BOILER_FULL`,
+`COLLECTOR_EMPTY`, `COLLECTOR_FULL`, `RESERVOIR_LOW`, `RESERVOIR_FULL`. They're
+persisted to `limits.json` on the Pico. The hard safety limits are **not**
+adjustable: the boiler overflow ceiling, the dry-tank heater floor and the
+vessel capacities. Every change is validated against them: paired setpoints
+need a gap of at least 200 g, `BOILER_FULL` must be at least 100 g below
+overflow, `BOILER_TOPOFF` must be at or above the dry-tank floor, and FULL
+setpoints can't exceed capacity. An invalid change is rejected and leaves all
+values unchanged.
+
+**Limits reply, Pico → ESP32** (one-off line after each `GET:LIMITS` / `SET` /
+`RESET_LIMITS`, not part of the 1 Hz status stream):
+```json
+{"limits":{"boiler_topoff":3200,"boiler_full":3600,"collector_empty":300,
+ "collector_full":7200,"reservoir_low":30000,"reservoir_full":32000},
+ "ok":true,"err":null}
+```
+On rejection, `ok` is false, `err` gives the reason, and `limits` shows the
+unchanged values. `PicoLink` routes these lines to `last_limits`, not
+`last_status`.
 
 **Status, Pico → ESP32** (JSON per line, pushed at ~1 Hz from core 1):
 ```json
 {"cmd":"START","state":"RUN","temp_f":172.4,"tds1_ppm":8,"tds2_ppm":11,
  "boiler_g":3550,"collector_g":7100,"reservoir_g":31500,
- "boiler_pct":94,"collector_pct":93,"reservoir_pct":92,
  "valves":{"main":0,"refill":0,"transfer":1},
  "pressure_sw":true,
  "heater":1,
  "fault":{"tds1":false,"overflow":false,"refill_timeout":false,"valve_stuck":false},
  "alert":{"tds2":false}}
 ```
+Fill percentages aren't sent. The HMI computes them from `*_g` and the vessel
+capacities in §3, which keeps the line short. The Pico's UART also uses
+`txbuf=1024` plus a write-all loop, because rp2 `uart.write()` silently drops
+whatever doesn't fit in the TX buffer (default is about 288 bytes including
+the FIFO).
+
 `cmd` is what the operator last sent; `state` is what the system is actually
 doing right now, one of:
 - `RUN` — actively distilling (`START`, downstream not full) or sterilizing (`STERILIZE`)

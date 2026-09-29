@@ -25,6 +25,9 @@ class PicoLink:
         self.uart = UART(uart_id, baudrate=baudrate, tx=tx, rx=rx, rxbuf=1024)
         self._buf = b""
         self.last_status = {}
+        # Latest one-off {"limits": ..., "ok": ..., "err": ...} reply, sent by
+        # the Pico in response to GET:LIMITS / SET:... / RESET_LIMITS.
+        self.last_limits = None
         self.link_errors = 0  # count of overflow/decode failures, for diagnostics
         self.last_bad_line = None  # most recent line that failed to parse
 
@@ -46,11 +49,15 @@ class PicoLink:
         while b"\n" in self._buf:
             line, self._buf = self._buf.split(b"\n", 1)
             try:
-                newest = json.loads(line.decode().strip())
+                msg = json.loads(line.decode().strip())
             except ValueError:
                 self.link_errors += 1
                 self.last_bad_line = line
                 continue
+            if "limits" in msg:
+                self.last_limits = msg
+            else:
+                newest = msg
         if newest is not None:
             self.last_status = newest
         return newest
