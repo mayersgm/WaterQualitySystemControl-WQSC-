@@ -1,55 +1,102 @@
-# WQCS bench-test console (MicroPython).
+# WQCS touchscreen HMI (lvgl_micropython firmware, ESP32-2432S032C).
 #
-# Not the Phase 3 touchscreen HMI -- just a thin stdin/stdout wrapper around
-# PicoLink for driving/observing the Phase 2 Pico bench test (see
-# Phase2_BenchTest_Sequence.md). The Phase 3 UI will use PicoLink directly
-# with touchscreen input instead of this console loop -- this file is the
-# only bench-only part; pico_link.py is the reusable part.
-
-import sys
-import select
+# Pure operator interface: shows Pico status and sends operator commands.
+# All control and safety logic lives on the Pico. Debug console: import console
+import time
+import lvgl as lv
+import hw
 from pico_link import PicoLink
+from dashboard import Dashboard
+from calibration import CalibrationScreen
+from settings import SettingsScreen
 
-link = PicoLink()
+LINK_TIMEOUT_MS = 3000
 
-poll = select.poll()
-poll.register(sys.stdin, select.POLLIN)
 
-print("WQCS bench console ready. Type a command and press Enter:")
-print("  START | STOP | STERILIZE | EMPTY | RESET | ACK")
-print("  TARE:BOILER | CAL:BOILER:<grams>  (also COLLECTOR / RESERVOIR)")
-print("  GET:LIMITS | RESET_LIMITS | SET:BOILER_FULL:<g> | SET:BOILER_TOPOFF=<g>,BOILER_FULL=<g>")
+class App:
+    def __init__(self):
+        hw.init()
+        self.link = PicoLink()
+        self.limits = None
+        self.last_rx = None
+        self.link_ok = False
 
-input_line = ""
-reported_errors = 0
+        self.dashboard = Dashboard(self.send, self.show_cal, self.show_levels)
+        self.cal = CalibrationScreen(self.send, self.show_dashboard)
+        self.levels = SettingsScreen(self.send, self.show_dashboard)
+        self.active = self.dashboard
+        lv.screen_load(self.dashboard.scr)
+        self.send("GET:LIMITS")
 
-while True:
-    # Typed command -> Pico
-    while poll.poll(0):
-        ch = sys.stdin.read(1)
-        if not ch:
-            # stdin reporting ready but returning nothing (can happen after
-            # the USB serial connection has been reconnected) -- without
-            # this, the loop spins here forever and link.poll() below never
-            # runs, so incoming status silently stops appearing.
-            break
-        if ch in ("\n", "\r"):
-            if input_line:
-                link.send(input_line)
-                print("->", input_line)
-                input_line = ""
-        elif ch in ("\x08", "\x7f"):  # backspace/delete
-            input_line = input_line[:-1]
-        else:
-            input_line += ch
+    def send(self, cmd):
+        print("->", cmd)
+        self.link.send(cmd)
 
-    # Status <- Pico
-    status = link.poll()
-    if status is not None:
-        print("<-", status)
-    if link.last_limits is not None:
-        print("<- LIMITS", link.last_limits)
-        link.last_limits = None
-    if link.link_errors != reported_errors:
-        reported_errors = link.link_errors
-        print("!! link_errors:", reported_errors, "last_bad_line:", link.last_bad_line)
+    def _show(self, screen):
+        self.active = screen
+        lv.screen_load(screen.scr)
+        if self.link.last_status:
+            screen.update(self.link.last_status)
+
+    def show_dashboard(self):
+        self._show(self.dashboard)
+
+    def show_cal(self):
+        self._show(self.cal)
+
+    def show_levels(self):
+        self.levels.load(self.limits)
+        self._show(self.levels)
+        self.send("GET:LIMITS")
+
+    def step(self):
+        status = self.link.poll()
+        now = time.ticks_ms()
+
+        reply = self.link.last_limits
+        if reply is not None:
+            self.link.last_limits = None
+            self.last_rx = now
+            print("<- limits", reply)
+            self.limits = reply["limits"]
+            self.dashboard.update_limits(self.limits)
+            if self.active is self.levels:
+                self.levels.on_reply(reply)
+
+        if status is not None:
+            self.last_rx = now
+            self.link_ok = True
+            self.active.update(status)
+            if self.active is not self.dashboard:
+                self.dashboard.update(status)
+            if self.limits is None:
+                self.send("GET:LIMITS")  # Pico booted after us, or the reply was lost
+
+        if self.link_ok and (self.last_rx is None or
+                             time.ticks_diff(now, self.last_rx) > LINK_TIMEOUT_MS):
+            self.link_ok = False
+            self.dashboard.show_link_lost(self.link.link_errors)
+
+    def run(self):
+        while True:
+            self.step()
+            time.sleep_ms(20)
+
+
+try:
+    App().run()
+except Exception as e:  # KeyboardInterrupt (Ctrl-C from a laptop) is not caught
+    import sys
+    import machine
+    sys.print_exception(e)
+    try:
+        with open("crash.log", "a") as f:  # survives the reset; read with mpremote cat
+            f.write("--- uptime %d ms\n" % time.ticks_ms())
+            sys.print_exception(e, f)
+    except OSError:
+        pass
+    print("HMI crashed; hard reset in 5 s (Ctrl-C to stay in the REPL)")
+    time.sleep(5)
+    # hard, not soft: a soft reset leaves the SPI bus driver with a dangling
+    # pointer and the next hw.init() panics (see BUILD.md)
+    machine.reset()
