@@ -16,9 +16,27 @@ UART_BAUD = 9600       # bench wiring can't reliably carry 115200 -- see Phase0_
 
 # BENCH TEST PINS (spare WQCS PCB, fixed screw-terminal wiring) -- revert to
 # the production pin map (GP10/11/12/13/14) before real deployment (Phase 6).
-MAIN_VALVE = Pin(19, Pin.OUT)      # motorized, water main -> boiler, overflow shutoff
-REFILL_VALVE = Pin(10, Pin.OUT)    # 12V solenoid, boiler refill
-TRANSFER_VALVE = Pin(21, Pin.OUT)  # motorized, collector -> reservoir
+class ActiveLowOutput:
+    """Output for an opto-isolated relay module (817C input stage: LED anode
+    to VCC through 1k, cathode to IN), which energizes when IN is pulled LOW.
+    Open-drain so "off" releases the pin rather than driving it high, which
+    could still leak through the opto LED if the module's VCC is 5V. value()
+    takes/returns the logical state (1 = on/energized), like a plain Pin."""
+
+    def __init__(self, pin_num):
+        self._pin = Pin(pin_num, Pin.OPEN_DRAIN, value=1)
+        self._on = 0
+
+    def value(self, on=None):
+        if on is None:
+            return self._on
+        self._on = 1 if on else 0
+        self._pin.value(0 if self._on else 1)
+
+
+MAIN_VALVE = ActiveLowOutput(19)      # motorized, water main -> boiler, overflow shutoff
+REFILL_VALVE = ActiveLowOutput(18)    # 12V solenoid, boiler refill (bench PCB: legacy GP18, DVM-confirmed 2026-09-26)
+TRANSFER_VALVE = ActiveLowOutput(21)  # motorized, collector -> reservoir
 BOILER_RELAY = Pin(16, Pin.OUT)
 # Pressure switch in the segment between the main valve and the refill
 # solenoid: when the solenoid is (actually) closed, blocked water builds
@@ -26,7 +44,16 @@ BOILER_RELAY = Pin(16, Pin.OUT)
 # open, flow relieves that pressure. Only meaningful while the main valve is
 # open -- see the stuck-valve cross-check in _control_step.
 PRESSURE_SW = Pin(11, Pin.IN, Pin.PULL_UP)
-PRESSURE_SW_ACTIVE_HIGH = True  # placeholder -- verify actual switch polarity in Phase 6 bench test
+PRESSURE_SW_ACTIVE_HIGH = False  # bench sim relay polarity (GP10/PRESSURE_SIM_RELAY) confirmed 2026-09-27 -- re-verify against the real switch in Phase 6
+
+# BENCH-ONLY SIMULATION -- there is no real pressure switch on the bench yet.
+# GP10 drives a second, directly-wired (active-high, not opto) relay whose
+# COM feeds GP11/PRESSURE_SW, standing in for a real switch's back-pressure
+# signal. It must be pulsed in lockstep with the real refill solenoid (GP18)
+# below. Remove PRESSURE_SIM_RELAY and this sync entirely once a real
+# pressure switch is wired for Phase 6 -- production reads PRESSURE_SW from
+# genuine hardware, nothing drives it from firmware.
+PRESSURE_SIM_RELAY = Pin(10, Pin.OUT, value=0)
 LED = Pin(25, Pin.OUT)             # core-0 heartbeat
 
 for _pin in (MAIN_VALVE, REFILL_VALVE, TRANSFER_VALVE, BOILER_RELAY):
@@ -36,18 +63,20 @@ for _pin in (MAIN_VALVE, REFILL_VALVE, TRANSFER_VALVE, BOILER_RELAY):
 # Weight thresholds, grams post-tare — see Phase0_Design.md sec 3
 # ---------------------------------------------------------------------------
 BOILER_CAPACITY_G = 3785
-BOILER_TOPOFF_G = 3200         # refill turns on below this (covers cold-start empty too)
-BOILER_FULL_G = 3600           # refill turns off at/above this
-BOILER_OVERFLOW_G = 3700       # hard safety cutoff, above the normal FULL target
-REFILL_TIMEOUT_S = 10          # BENCH TEST VALUE -- revert to 300 before real deployment (Phase 6)
+# BENCH TEST THRESHOLDS (only ~1-2kg of reference weight available) -- revert
+# every value marked "prod:" to the production number before Phase 6.
+BOILER_TOPOFF_G = 300          # prod: 3200 -- refill turns on below this (covers cold-start empty too)
+BOILER_FULL_G = 600            # prod: 3600 -- refill turns off at/above this
+BOILER_OVERFLOW_G = 900        # prod: 3700 -- hard safety cutoff, above the normal FULL target
+REFILL_TIMEOUT_S = 90          # BENCH TEST VALUE (10 for the step-6 timeout test) -- revert to 300 before real deployment (Phase 6)
 
 COLLECTOR_CAPACITY_G = 7570
-COLLECTOR_EMPTY_G = 300
-COLLECTOR_FULL_G = 7200
+COLLECTOR_EMPTY_G = 100        # prod: 300
+COLLECTOR_FULL_G = 500         # prod: 7200
 
 RESERVOIR_CAPACITY_G = 34065
-RESERVOIR_FULL_G = 32000
-RESERVOIR_TRANSFER_LOW_G = 30000   # "under capacity" trigger to start a transfer
+RESERVOIR_FULL_G = 800         # prod: 32000
+RESERVOIR_TRANSFER_LOW_G = 400   # prod: 30000 -- "under capacity" trigger to start a transfer
 
 TDS_FAULT_PPM = 50             # carried over from old system's contamination threshold
 
@@ -254,6 +283,7 @@ class Wqcs:
                 self.refill_open = False
                 self.refill_started_at = None
         REFILL_VALVE.value(1 if self.refill_open else 0)
+        PRESSURE_SIM_RELAY.value(1 if self.refill_open else 0)  # BENCH-ONLY, see note above
 
         # ---- stuck-solenoid cross-check via the pressure switch --------------
         # Only meaningful with the main valve actually open (source pressure
