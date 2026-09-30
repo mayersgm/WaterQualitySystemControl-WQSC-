@@ -137,7 +137,7 @@ the FIFO).
 `cmd` is what the operator last sent; `state` is what the system is actually
 doing right now, one of:
 - `RUN` — actively distilling (`START`, downstream not full) or sterilizing (`STERILIZE`)
-- `STANDBY` — commanded `START` but paused: the collector is FULL and the reservoir can't take its entire contents (reservoir + collector > reservoir FULL), so there's nowhere for more distillate to go. Resumes automatically once the reservoir is drawn down enough for the transfer to fit.
+- `STANDBY` — commanded `START` but paused because the collector is at/above FULL, whatever the reservoir holds. If the whole collector fits in the reservoir (reservoir + collector ≤ reservoir FULL) the transfer drains it meanwhile (HMI: "STANDBY - transferring"), otherwise it waits for the reservoir to be drawn down ("STANDBY - no room"). Production resumes once the collector drops below FULL.
 - `STOPPED` — `STOP`
 - `EMPTY` — `EMPTY` (parked for manual draining)
 - `FAULT` — any of the four recoverable faults below is latched
@@ -154,7 +154,7 @@ does the actual metering/on-off. The main valve force-closes on any of:
 - TDS-1 fault (halt distillation — no point admitting more source water)
 - refill timeout (refill valve stuck open past its failsafe cap)
 - **refill solenoid stuck** (see below — cross-checked via the pressure switch)
-- the `STANDBY` condition (collector FULL and the reservoir can't take it all)
+- the `STANDBY` condition (collector at/above FULL)
 - collector overflow (fixed ceiling — e.g. transfer valve stuck closed)
 - reservoir overflow (fixed ceiling — e.g. transfer valve stuck open)
 - transfer leak: with the transfer closed, the collector drops ≥300 g from its peak **and** the reservoir rises ≥150 g from its low point (weight-based, no timing, since gravity flow can be arbitrarily slow)
@@ -227,7 +227,9 @@ value — **must revert to 300 before real deployment**, tracked for Phase 6).
 
 - A transfer starts only when the collector is FULL **and** the reservoir can take
   the collector's entire contents: `reservoir + collector ≤ reservoir FULL`. It
-  stops when the collector reaches EMPTY or the reservoir reaches FULL. This
+  stops when the collector reaches EMPTY or the reservoir reaches FULL.
+  Production pauses (STANDBY) whenever the collector is at/above FULL, even
+  while a transfer that fits is draining it (user rule 2026-09-29). This
   replaced the old reservoir LOW trigger, which left a gap: with the reservoir
   between LOW and FULL, a full collector neither transferred nor paused
   production, and could overflow.

@@ -8,6 +8,7 @@ import time
 import machine
 import lvgl as lv
 import hw
+import widgets as w
 from pico_link import PicoLink
 from dashboard import Dashboard
 from calibration import CalibrationScreen
@@ -15,6 +16,7 @@ from settings import SettingsScreen
 from alarm import Alarm
 
 LINK_TIMEOUT_MS = 3000
+LIMITS_REFRESH_MS = 60 * 1000   # bars/markers scale to the Pico's limits; keep them current
 HEAP_LOG_MS = 60 * 1000
 GC_EVERY_MS = 1000              # frequent collection keeps free heap contiguous
 LV_ERRORS_BEFORE_RESET = 5      # within LV_ERROR_WINDOW_MS
@@ -58,13 +60,18 @@ class App:
         hw.init(exception_hook=self._on_lv_error)
         self.link = PicoLink()
         self.limits = None
+        self._limits_asked = time.ticks_ms()
         self.last_rx = None
         self.link_ok = False
 
         self.alarm = Alarm()
         self.dashboard = Dashboard(self.send, self.show_cal, self.show_levels, self.ack)
-        self.cal = CalibrationScreen(self.send, self.show_dashboard)
-        self.levels = SettingsScreen(self.send, self.show_dashboard)
+        # Built on demand and deleted on return: LVGL allocates from the tight
+        # MicroPython heap, and keeping all three screens alive left too little
+        # headroom for rendering (MemoryError resets).
+        self.cal = None
+        self.levels = None
+        self._close_pending = False
         self.active = self.dashboard
         lv.screen_load(self.dashboard.scr)
         self.send("GET:LIMITS")
@@ -102,16 +109,35 @@ class App:
 
     def show_dashboard(self):
         self._show(self.dashboard)
+        # Can't delete the old screen here: this runs inside its Back button's
+        # click handler. step() deletes it on the next pass, outside LVGL.
+        self._close_pending = True
+
+    def _close_secondary_screens(self):
+        self._close_pending = False
+        for attr in ("cal", "levels"):
+            screen = getattr(self, attr)
+            if screen is not None and screen is not self.active:
+                screen.scr.delete()
+                setattr(self, attr, None)
+        w.forget_all()
+        gc.collect()
 
     def show_cal(self):
+        if self.cal is None:
+            self.cal = CalibrationScreen(self.send, self.show_dashboard)
         self._show(self.cal)
 
     def show_levels(self):
+        if self.levels is None:
+            self.levels = SettingsScreen(self.send, self.show_dashboard)
         self.levels.load(self.limits)
         self._show(self.levels)
         self.send("GET:LIMITS")
 
     def step(self):
+        if self._close_pending:
+            self._close_secondary_screens()
         status = self.link.poll()
         now = time.ticks_ms()
 
@@ -122,7 +148,7 @@ class App:
             print("<- limits", reply)
             self.limits = reply["limits"]
             self.dashboard.update_limits(self.limits)
-            if self.active is self.levels:
+            if self.levels is not None and self.active is self.levels:
                 self.levels.on_reply(reply)
 
         if status is not None:
@@ -131,14 +157,18 @@ class App:
             self.active.update(status)
             if self.active is not self.dashboard:
                 self.dashboard.update(status)
-            if self.limits is None:
-                self.send("GET:LIMITS")  # Pico booted after us, or the reply was lost
+            if self.limits is None or time.ticks_diff(now, self._limits_asked) > LIMITS_REFRESH_MS:
+                # first fetch (Pico booted after us / reply lost) or periodic
+                # refresh (Pico restarted or its limits changed)
+                self._limits_asked = now
+                self.send("GET:LIMITS")
 
         tdscal = self.link.last_tdscal
         if tdscal is not None:
             self.link.last_tdscal = None
             print("<- tdscal", tdscal)
-            self.cal.on_tdscal(tdscal)
+            if self.cal is not None:
+                self.cal.on_tdscal(tdscal)
 
         if self.link_ok and (self.last_rx is None or
                              time.ticks_diff(now, self.last_rx) > LINK_TIMEOUT_MS):

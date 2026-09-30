@@ -181,7 +181,6 @@ class Wqcs:
         self._db_collector_overflow = Debounce()
         self._db_reservoir_overflow = Debounce()
         self._db_transfer_fits = Debounce()   # reservoir can take the whole collector
-        self._db_no_room = Debounce()         # ...and the opposite, for STANDBY
         self._db_transfer_leak = Debounce()
         self._db_tds1_fault = Debounce()
         self._db_tds2_alert = Debounce()
@@ -353,7 +352,6 @@ class Wqcs:
         # decided by weight up front rather than by timing the transfer).
         fits = collector_g + reservoir_g <= lim["reservoir_full"]
         transfer_fits = self._db_transfer_fits.check(fits)
-        no_room = self._db_no_room.check(not fits)
         tds1_bad = self._db_tds1_fault.check(tds1_ppm >= TDS_FAULT_PPM)
         tds2_bad = self._db_tds2_alert.check(tds2_ppm >= TDS_FAULT_PPM)
 
@@ -371,13 +369,13 @@ class Wqcs:
         self.alert_tds2 = tds2_bad  # non-latching, informational only
         any_fault = any(self.faults.values())
 
-        # STANDBY: the collector is full and the reservoir can't take all of
-        # it, so there's nowhere for more distillate to go. Pause production
-        # until the reservoir is drawn down enough for a transfer to fit. This
-        # applies even mid-transfer (distillate arriving during a slow gravity
-        # transfer can push the total over capacity); the transfer itself
-        # carries on until the reservoir is FULL or the collector is EMPTY.
-        downstream_full = collector_full and no_room
+        # STANDBY: the collector is at/above FULL, whatever the reservoir holds
+        # (little headroom above FULL, and a gravity transfer can be slow).
+        # Production pauses; if the whole collector fits in the reservoir the
+        # transfer drains it meanwhile, and production resumes once the
+        # collector drops below FULL. If it doesn't fit, STANDBY holds until
+        # the reservoir is drawn down.
+        downstream_full = collector_full
 
         main_close = any_fault or downstream_full or not active
 

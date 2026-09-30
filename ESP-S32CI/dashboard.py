@@ -24,7 +24,7 @@ STATE_STYLE = {
     "FAULT": (w.RED, "FAULT"),
 }
 
-# setpoints drawn as markers on each vessel
+# setpoints drawn as markers on each vessel (FULL is the top of the bar)
 MARKERS = {
     "boiler": ("boiler_topoff", "boiler_full"),
     "collector": ("collector_empty", "collector_full"),
@@ -33,8 +33,15 @@ MARKERS = {
 
 
 class _Vessel:
+    """Level bar scaled to the operator's settings: 0% = empty, 100% = the
+    vessel's FULL setpoint (falls back to physical capacity until the Pico's
+    limits arrive). The % label can exceed 100 and the bar turns amber at/over
+    FULL, so overfill stays visible."""
+
     def __init__(self, parent, name, title, x):
         self.name = name
+        self.full = None
+        self.g = None
         self.panel = w.box(parent, x, VESSEL_Y, 104, VESSEL_H)
         w.label(self.panel, title, color=w.MUTED).set_pos(6, 3)
         self.bar = lv.bar(self.panel)
@@ -55,21 +62,52 @@ class _Vessel:
         self.grams.set_pos(6, BAR_Y + BAR_H + 4)
         self.pct = w.label(self.panel, "", color=w.MUTED)
         self.pct.set_pos(56, 3)
+        self.room = None
+        if name == "reservoir":
+            # "no room" line: above it, a full collector no longer fits
+            self.room = w.box(self.panel, 4, BAR_Y, 48, 2, w.TEAL, radius=0)
+            self.room.add_flag(lv.obj.FLAG.HIDDEN)
+
+    def _pct(self, g):
+        scale = self.full or w.CAPACITY[self.name]
+        return int(100 * g / scale) if scale > 0 else 0
+
+    def _y(self, p):
+        p = max(0, min(100, p))
+        return BAR_Y + BAR_H - 1 - (BAR_H * p) // 100
 
     def set_weight(self, g):
-        p = w.pct(self.name, g)
-        if w.changed(self.bar, "value", p):
-            self.bar.set_value(p, True)  # LVGL 9: lv_anim_enable_t is a bool, no lv.ANIM enum
+        self.g = g
+        if g is None:
+            return
+        p = self._pct(g)
+        bar_p = max(0, min(100, p))
+        if w.changed(self.bar, "value", bar_p):
+            self.bar.set_value(bar_p, True)  # LVGL 9: lv_anim_enable_t is a bool, no lv.ANIM enum
+        over = self.full is not None and g >= self.full
+        if w.changed(self.bar, "over", over):
+            self.bar.set_style_bg_color(w.AMBER if over else w.WATER, lv.PART.INDICATOR)
         # 10 g resolution: sub-10 g scale jitter would otherwise redraw every second
-        w.set_text(self.grams, w.fmt_g(None if g is None else round(g, -1)))
+        w.set_text(self.grams, w.fmt_g(round(g, -1)))
         w.set_text(self.pct, "%d%%" % p)
 
     def set_limits(self, limits):
+        self.full = limits.get(self.name + "_full") or None
         for key, m in self.markers.items():
             if key in limits:
-                p = w.pct(self.name, limits[key])
-                m.set_y(BAR_Y + BAR_H - 1 - (BAR_H * p) // 100)
+                m.set_y(self._y(self._pct(limits[key])))
                 m.remove_flag(lv.obj.FLAG.HIDDEN)
+        if self.g is not None:
+            self.set_weight(self.g)   # rescale the bar to the new FULL
+
+    def set_room_line(self, room_g):
+        """Reservoir only: level above which a full collector won't fit."""
+        if self.room is None or self.full is None:
+            return
+        y = self._y(self._pct(room_g))
+        if w.changed(self.room, "y", y):
+            self.room.set_y(y)
+        w.set_hidden(self.room, False)
 
 
 class _Tile:
@@ -159,6 +197,10 @@ class Dashboard:
         color, text = STATE_STYLE.get(state, (w.GREY, state))
         if state == "RUN" and self.cmd == "STERILIZE":
             text = "RUN - sterilizing"
+        elif state == "STANDBY":
+            # collector FULL: draining into the reservoir, or waiting for room
+            text = ("STANDBY - transferring" if s.get("valves", {}).get("transfer")
+                    else "STANDBY - no room")
         faults = [k for k, on in s.get("fault", {}).items() if on]
         if faults:
             color = w.RED
@@ -168,6 +210,9 @@ class Dashboard:
 
         for name, v in self.vessels.items():
             v.set_weight(s.get(name + "_g"))
+        res, coll_g = self.vessels["reservoir"], s.get("collector_g")
+        if res.full is not None and coll_g is not None:
+            res.set_room_line(res.full - max(0, coll_g))
 
         valves = s.get("valves", {})
         self.main_valve.set_active(bool(valves.get("main")))

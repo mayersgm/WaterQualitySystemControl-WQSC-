@@ -75,6 +75,12 @@ def button(parent, text, on_click, x, y, w, h, color=GREY, font=FONT_M):
 _last = {}
 
 
+def forget_all():
+    """Call after deleting LVGL objects: their ids may be reused by new ones,
+    which would otherwise match stale entries and skip real updates."""
+    _last.clear()
+
+
 def changed(obj, prop, value):
     key = (id(obj), prop)
     if _last.get(key) == value:

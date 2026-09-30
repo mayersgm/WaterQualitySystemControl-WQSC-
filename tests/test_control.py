@@ -55,7 +55,20 @@ class ControlTest(unittest.TestCase):
         self.set(reservoir=450)                      # pump drew it down: 970 <= 1000
         s = self.step()
         self.assertEqual(s["valves"]["transfer"], 1)
-        self.assertNotEqual(s["state"], "STANDBY")
+        self.assertEqual(s["state"], "STANDBY")      # still paused: collector >= FULL
+
+    def test_full_collector_pauses_even_when_it_fits(self):
+        # user rule 2026-09-29: collector at/above FULL -> STANDBY whatever the
+        # reservoir holds; the transfer drains it meanwhile, production resumes
+        # once the collector is back below FULL.
+        self.set(collector=520, reservoir=0)
+        s = self.step()
+        self.assertEqual((s["state"], s["heater"], s["valves"]["main"]), ("STANDBY", 0, 0))
+        self.assertEqual(s["valves"]["transfer"], 1)
+        self.set(collector=400, reservoir=120)       # drained below FULL
+        s = self.step()
+        self.assertEqual((s["state"], s["heater"]), ("RUN", 1))
+        self.assertEqual(s["valves"]["transfer"], 1)  # keeps going to EMPTY
 
     def test_production_pauses_if_total_outgrows_capacity_mid_transfer(self):
         # bench case 2026-09-29: transfer running, then the total grew to
