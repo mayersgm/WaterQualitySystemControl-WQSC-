@@ -10,13 +10,15 @@ TILE_Y, TILE_H = 151, 46
 TDS_FAULT_PPM = 50                 # mirrors Pico/main.py TDS_FAULT_PPM
 TDS_WARN_PPM = TDS_FAULT_PPM * 4 // 5
 
-FAULT_NAMES = {"tds1": "TDS-1", "overflow": "OVERFLOW",
-               "refill_timeout": "REFILL T/O", "valve_stuck": "VALVE STUCK"}
+FAULT_NAMES = {"tds1": "TDS-1", "overflow": "BOILER OVFL",
+               "refill_timeout": "REFILL T/O", "valve_stuck": "VALVE STUCK",
+               "collector_overflow": "COLL OVFL", "reservoir_overflow": "RES OVFL",
+               "transfer_leak": "XFER LEAK"}
 
 STATE_STYLE = {
     "RUN": (w.GREEN, "RUN - distilling"),
     "IDLE": (w.BLUE, "IDLE - filling boiler"),
-    "STANDBY": (w.AMBER, "STANDBY - vessels full"),
+    "STANDBY": (w.AMBER, "STANDBY - no room"),
     "STOPPED": (w.GREY, "STOPPED"),
     "EMPTY": (w.TEAL, "EMPTY - drain mode"),
     "FAULT": (w.RED, "FAULT"),
@@ -26,7 +28,7 @@ STATE_STYLE = {
 MARKERS = {
     "boiler": ("boiler_topoff", "boiler_full"),
     "collector": ("collector_empty", "collector_full"),
-    "reservoir": ("reservoir_low", "reservoir_full"),
+    "reservoir": ("reservoir_full",),
 }
 
 
@@ -56,9 +58,11 @@ class _Vessel:
 
     def set_weight(self, g):
         p = w.pct(self.name, g)
-        self.bar.set_value(p, True)  # LVGL 9: lv_anim_enable_t is a bool, no lv.ANIM enum
-        self.grams.set_text(w.fmt_g(g))
-        self.pct.set_text("%d%%" % p)
+        if w.changed(self.bar, "value", p):
+            self.bar.set_value(p, True)  # LVGL 9: lv_anim_enable_t is a bool, no lv.ANIM enum
+        # 10 g resolution: sub-10 g scale jitter would otherwise redraw every second
+        w.set_text(self.grams, w.fmt_g(None if g is None else round(g, -1)))
+        w.set_text(self.pct, "%d%%" % p)
 
     def set_limits(self, limits):
         for key, m in self.markers.items():
@@ -78,8 +82,8 @@ class _Tile:
         self.value.set_pos(6, 18)
 
     def set(self, text, color):
-        self.value.set_text(text)
-        self.value.set_style_text_color(color, 0)
+        w.set_text(self.value, text)
+        w.set_text_color(self.value, color)
 
 
 def _tds_color(ppm, faulted):
@@ -159,15 +163,8 @@ class Dashboard:
         if faults:
             color = w.RED
             text = "FAULT " + "+".join(FAULT_NAMES.get(k, k) for k in faults)
-            self.btn_ack.remove_flag(lv.obj.FLAG.HIDDEN)
-        else:
-            self.btn_ack.add_flag(lv.obj.FLAG.HIDDEN)
-        self.banner.set_style_bg_color(color, 0)
-        self.state_lbl.set_style_text_color(
-            lv.color_hex(0x10151A) if color == w.AMBER else w.TEXT, 0)
-        self.state_lbl.set_style_text_font(w.FONT_S if faults else w.FONT_M, 0)
-        self.state_lbl.set_text(text)
-        self.state_lbl.align(lv.ALIGN.LEFT_MID, 8, 0)
+        w.set_hidden(self.btn_ack, not faults)
+        self._set_banner(color, text, small=bool(faults))
 
         for name, v in self.vessels.items():
             v.set_weight(s.get(name + "_g"))
@@ -190,15 +187,22 @@ class Dashboard:
         self.t_tds2.set("%d ppm" % tds2, _tds_color(tds2, s.get("alert", {}).get("tds2")))
 
         w.set_button_text(self.btn_start, "STOP" if self.cmd == "START" else "START")
-        self.btn_start.set_style_bg_color(w.RED if self.cmd == "START" else w.GREEN, 0)
+        w.set_bg(self.btn_start, w.RED if self.cmd == "START" else w.GREEN)
         w.set_button_text(self.btn_ster, "CANCEL" if self.cmd == "STERILIZE" else "STERILIZE")
         w.set_button_text(self.btn_empty, "CANCEL" if self.cmd == "EMPTY" else "EMPTY")
+
+    def _set_banner(self, color, text, small=False):
+        w.set_bg(self.banner, color)
+        w.set_text_color(self.state_lbl, w.DARK_TEXT if color is w.AMBER else w.TEXT)
+        if w.changed(self.state_lbl, "small", small):
+            self.state_lbl.set_style_text_font(w.FONT_S if small else w.FONT_M, 0)
+        if w.changed(self.state_lbl, "text", text):
+            self.state_lbl.set_text(text)
+            self.state_lbl.align(lv.ALIGN.LEFT_MID, 8, 0)
 
     def update_limits(self, limits):
         for v in self.vessels.values():
             v.set_limits(limits)
 
     def show_link_lost(self, errors):
-        self.banner.set_style_bg_color(w.PURPLE, 0)
-        self.state_lbl.set_style_text_color(w.TEXT, 0)
-        self.state_lbl.set_text("NO LINK TO PICO" + (" (err %d)" % errors if errors else ""))
+        self._set_banner(w.PURPLE, "NO LINK TO PICO" + (" (err %d)" % errors if errors else ""))

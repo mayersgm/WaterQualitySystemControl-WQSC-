@@ -24,15 +24,20 @@ MAIN_PY = Path(__file__).resolve().parent.parent / "Pico" / "main.py"
 
 
 def load_defaults():
-    """DEFAULT_LIMITS dict + BOILER_OVERFLOW_G, read from main.py's source."""
+    """DEFAULT_LIMITS dict + the fixed overflow ceilings, read from main.py's source."""
+    names = {"DEFAULT_LIMITS": None, "BOILER_OVERFLOW_G": "boiler_overflow",
+             "COLLECTOR_OVERFLOW_G": "collector_overflow",
+             "RESERVOIR_OVERFLOW_G": "reservoir_overflow"}
     found = {}
     for node in ast.parse(MAIN_PY.read_text()).body:
         if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name):
             name = node.targets[0].id
-            if name in ("DEFAULT_LIMITS", "BOILER_OVERFLOW_G"):
+            if name in names:
                 found[name] = ast.literal_eval(node.value)
     limits = dict(found["DEFAULT_LIMITS"])
-    limits["boiler_overflow"] = found["BOILER_OVERFLOW_G"]
+    for const, key in names.items():
+        if key:
+            limits[key] = found[const]
     return limits
 
 
@@ -54,10 +59,13 @@ def tags(t, boiler, collector, reservoir):
     b = "OVER" if boiler >= t["boiler_overflow"] else \
         "FULL" if boiler >= t["boiler_full"] else \
         "<TOPOFF" if boiler < t["boiler_topoff"] else ""
-    c = "FULL" if collector >= t["collector_full"] else \
+    c = "OVER" if collector >= t["collector_overflow"] else \
+        "FULL" if collector >= t["collector_full"] else \
         "EMPTY" if collector <= t["collector_empty"] else ""
-    r = "FULL" if reservoir >= t["reservoir_full"] else \
-        "LOW" if reservoir < t["reservoir_low"] else ""
+    # FITS: the reservoir can take the whole collector (transfer allowed)
+    r = "OVER" if reservoir >= t["reservoir_overflow"] else \
+        "FULL" if reservoir >= t["reservoir_full"] else \
+        "FITS" if reservoir + collector <= t["reservoir_full"] else ""
     return b, c, r
 
 

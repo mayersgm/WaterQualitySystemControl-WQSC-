@@ -71,8 +71,8 @@ chatter at the boundary.
 | Vessel | Nominal capacity | EMPTY / LOW | FULL (target) | Notes |
 |---|---|---|---|---|
 | Boiler (1 gal ≈ 3785 g) | 3785 g | < 200 g | 3600 g (~95%) | `TOPOFF` refill triggers below ~3200 g during active distillation (mid-cycle top-off vs. cold-start full fill — same distinction the old MIN/MID/MAX logic made, now continuous) |
-| Collector (2 gal ≈ 7570 g) | 7570 g | < 300 g | 7200 g (~95%) | Triggers transfer-valve open once FULL and reservoir is under capacity |
-| Reservoir (9 gal ≈ 34065 g) | 34065 g | < 500 g | 32000 g (~94%) | Transfer valve closes at FULL; "under capacity" for triggering a transfer = below ~30000 g (2000 g hysteresis below FULL) |
+| Collector (2 gal ≈ 7570 g) | 7570 g | < 300 g | 7200 g (~95%) | Transfer opens once FULL **and** the reservoir can take the whole collector (reservoir + collector ≤ reservoir FULL). Fixed overflow fault at 7400 g. |
+| Reservoir (9 gal ≈ 34065 g) | 34065 g | < 500 g | 32000 g (~94%) | FULL = usable capacity (operator-adjustable): a transfer only starts if the whole collector fits under it, and stops at FULL. Fixed overflow fault at 33500 g. |
 
 ## 4. UART protocol (Pico ↔ ESP32)
 
@@ -89,14 +89,15 @@ reported back as *derived state* instead (see below):
 START | STOP | STERILIZE | EMPTY | RESET
 TARE:BOILER | TARE:COLLECTOR | TARE:RESERVOIR
 CAL:BOILER:<grams> | CAL:COLLECTOR:<grams> | CAL:RESERVOIR:<grams>
-ACK        # clears a recoverable fault (tds1 / overflow / refill_timeout / valve_stuck)
+ACK        # clears recoverable faults (see fault list below)
 GET:LIMITS                         # request the current water-level setpoints
 SET:<KEY>:<grams>                  # change one setpoint, e.g. SET:BOILER_FULL:3400
 SET:<KEY>=<g>,<KEY>=<g>,...        # change several atomically (validated as a set)
 RESET_LIMITS                       # restore default setpoints
 ```
 Adjustable keys (`Pico/limits.py`): `BOILER_TOPOFF`, `BOILER_FULL`,
-`COLLECTOR_EMPTY`, `COLLECTOR_FULL`, `RESERVOIR_LOW`, `RESERVOIR_FULL`. They're
+`COLLECTOR_EMPTY`, `COLLECTOR_FULL`, `RESERVOIR_FULL` (the reservoir's usable
+capacity for the transfer rule; shown as "Reservoir capacity" on the HMI). They're
 persisted to `limits.json` on the Pico. The hard safety limits are **not**
 adjustable: the boiler overflow ceiling, the dry-tank heater floor and the
 vessel capacities. Every change is validated against them: paired setpoints
@@ -109,7 +110,7 @@ values unchanged.
 `RESET_LIMITS`, not part of the 1 Hz status stream):
 ```json
 {"limits":{"boiler_topoff":3200,"boiler_full":3600,"collector_empty":300,
- "collector_full":7200,"reservoir_low":30000,"reservoir_full":32000},
+ "collector_full":7200,"reservoir_full":32000},
  "ok":true,"err":null}
 ```
 On rejection, `ok` is false, `err` gives the reason, and `limits` shows the
@@ -123,7 +124,8 @@ unchanged values. `PicoLink` routes these lines to `last_limits`, not
  "valves":{"main":0,"refill":0,"transfer":1},
  "pressure_sw":true,
  "heater":1,
- "fault":{"tds1":false,"overflow":false,"refill_timeout":false,"valve_stuck":false},
+ "fault":{"tds1":false,"overflow":false,"refill_timeout":false,"valve_stuck":false,
+          "collector_overflow":false,"reservoir_overflow":false,"transfer_leak":false},
  "alert":{"tds2":false}}
 ```
 Fill percentages aren't sent. The HMI computes them from `*_g` and the vessel
@@ -135,7 +137,7 @@ the FIFO).
 `cmd` is what the operator last sent; `state` is what the system is actually
 doing right now, one of:
 - `RUN` — actively distilling (`START`, downstream not full) or sterilizing (`STERILIZE`)
-- `STANDBY` — commanded `START` but paused: collector **and** reservoir both read FULL (there's nowhere for more distillate to go). If only the reservoir is full but the collector still has room, distillation continues — the collector just holds output until a transfer opens room again.
+- `STANDBY` — commanded `START` but paused: the collector is FULL and the reservoir can't take its entire contents (reservoir + collector > reservoir FULL), so there's nowhere for more distillate to go. Resumes automatically once the reservoir is drawn down enough for the transfer to fit.
 - `STOPPED` — `STOP`
 - `EMPTY` — `EMPTY` (parked for manual draining)
 - `FAULT` — any of the four recoverable faults below is latched
@@ -152,7 +154,10 @@ does the actual metering/on-off. The main valve force-closes on any of:
 - TDS-1 fault (halt distillation — no point admitting more source water)
 - refill timeout (refill valve stuck open past its failsafe cap)
 - **refill solenoid stuck** (see below — cross-checked via the pressure switch)
-- collector **and** reservoir both FULL (the `STANDBY` condition — nowhere for finished water to go)
+- the `STANDBY` condition (collector FULL and the reservoir can't take it all)
+- collector overflow (fixed ceiling — e.g. transfer valve stuck closed)
+- reservoir overflow (fixed ceiling — e.g. transfer valve stuck open)
+- transfer leak: with the transfer closed, the collector drops ≥300 g from its peak **and** the reservoir rises ≥150 g from its low point (weight-based, no timing, since gravity flow can be arbitrarily slow)
 
 All are checked every loop, independent of the normal fill/transfer state
 machine, same as the other safety interlocks in Phase 5. The heater is
@@ -217,3 +222,22 @@ once its firmware exists.
 
 `REFILL_TIMEOUT_S` is temporarily set to **10** in `Pico/main.py` (bench-only
 value — **must revert to 300 before real deployment**, tracked for Phase 6).
+
+## 7. Transfer rule and collector/reservoir protection (added 2026-09-29)
+
+- A transfer starts only when the collector is FULL **and** the reservoir can take
+  the collector's entire contents: `reservoir + collector ≤ reservoir FULL`. It
+  stops when the collector reaches EMPTY or the reservoir reaches FULL. This
+  replaced the old reservoir LOW trigger, which left a gap: with the reservoir
+  between LOW and FULL, a full collector neither transferred nor paused
+  production, and could overflow.
+- The transfer is **blocked** while TDS-1, reservoir-overflow or transfer-leak
+  faults are latched, so suspect distillate or a suspect valve never moves water
+  into the reservoir. A collector overflow does not block it, since transferring
+  relieves the collector.
+- All protection is weight-based, not timed, because the transfer is gravity-fed
+  and can be arbitrarily slow. Stuck-closed shows up as a collector overflow;
+  stuck-open shows up as a transfer leak or a reservoir overflow.
+- Covered by host tests in `tests/test_control.py`, which run the real
+  `Pico/main.py` control step against scripted weights.
+

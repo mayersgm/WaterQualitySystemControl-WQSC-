@@ -16,24 +16,45 @@ from alarm import Alarm
 
 LINK_TIMEOUT_MS = 3000
 HEAP_LOG_MS = 60 * 1000
+GC_EVERY_MS = 1000              # frequent collection keeps free heap contiguous
 LV_ERRORS_BEFORE_RESET = 5      # within LV_ERROR_WINDOW_MS
 LV_ERROR_WINDOW_MS = 60 * 1000
+
+# Hardware watchdog: fed only while the LVGL render loop is proven alive, so a
+# render stall *or* a whole-program hang reboots the HMI instead of leaving a
+# frozen screen. Armed late so tools/esp_deploy.py can still break in at boot.
+WDT_ARM_AFTER_MS = 20000
+WDT_TIMEOUT_MS = 10000
+RENDER_STALL_MS = 5000
 
 
 def log_crash(tag, e):
     """Print and append to crash.log (survives resets; read with mpremote cat)."""
     sys.print_exception(e)
+    if isinstance(e, MemoryError):
+        return  # writing the file needs memory we may not have
     try:
         with open("crash.log", "a") as f:
             f.write("--- %s uptime %d ms, heap free %d\n" % (tag, time.ticks_ms(), gc.mem_free()))
             sys.print_exception(e, f)
-    except OSError:
+    except Exception:  # never let logging raise inside an error handler
+        pass
+
+
+def note(text):
+    try:
+        with open("crash.log", "a") as f:
+            f.write("--- %s\n" % text)
+    except Exception:
         pass
 
 
 class App:
     def __init__(self):
         self._lv_errors = []
+        if machine.reset_cause() == machine.WDT_RESET:
+            print("booted after a WATCHDOG reset")
+            note("watchdog reset (render stall or hang) detected at boot")
         hw.init(exception_hook=self._on_lv_error)
         self.link = PicoLink()
         self.limits = None
@@ -50,7 +71,11 @@ class App:
 
     def _on_lv_error(self, e):
         # An exception in an LVGL callback: log it and keep rendering, but
-        # hard-reset if they keep coming (e.g. out of memory every frame).
+        # hard-reset if they keep coming. Out of memory mid-render leaves
+        # LVGL in an unknown state, so reset immediately (~3 s to recover).
+        if isinstance(e, MemoryError):
+            print("MemoryError in render; hard reset")
+            machine.reset()
         log_crash("lvgl callback", e)
         now = time.ticks_ms()
         self._lv_errors = [t for t in self._lv_errors
@@ -123,16 +148,32 @@ class App:
         self.alarm.update(status, self.link_ok)
 
     def run(self):
-        last_heap_log = time.ticks_ms()
+        last_heap_log = last_gc = time.ticks_ms()
+        wdt = None
+        last_frame, frame_seen = -1, time.ticks_ms()
         while True:
             self.step()
-            if time.ticks_diff(time.ticks_ms(), last_heap_log) > HEAP_LOG_MS:
-                last_heap_log = time.ticks_ms()
+            now = time.ticks_ms()
+
+            # render liveness: the dashboard's lv timer only runs while LVGL does
+            if self.dashboard.frame != last_frame:
+                last_frame, frame_seen = self.dashboard.frame, now
+            if wdt is None and now > WDT_ARM_AFTER_MS:
+                wdt = machine.WDT(timeout=WDT_TIMEOUT_MS)
+                print("watchdog armed")
+            if wdt is not None and time.ticks_diff(now, frame_seen) < RENDER_STALL_MS:
+                wdt.feed()
+
+            if time.ticks_diff(now, last_heap_log) > HEAP_LOG_MS:
+                last_heap_log = last_gc = now
                 before = gc.mem_free()
                 gc.collect()
                 # "after" is the real headroom; a steady decline means a leak
                 print("heap free before/after gc %d/%d uptime s %d" % (
-                    before, gc.mem_free(), time.ticks_ms() // 1000))
+                    before, gc.mem_free(), now // 1000))
+            elif time.ticks_diff(now, last_gc) > GC_EVERY_MS:
+                last_gc = now
+                gc.collect()
             time.sleep_ms(20)
 
 

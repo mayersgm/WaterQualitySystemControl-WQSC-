@@ -16,11 +16,10 @@ ROWS = (
     ("boiler_full", "Boiler FULL", "boiler", 50),
     ("collector_empty", "Collector EMPTY", "collector", 100),
     ("collector_full", "Collector FULL", "collector", 100),
-    ("reservoir_low", "Reservoir LOW", "reservoir", 500),
-    ("reservoir_full", "Reservoir FULL", "reservoir", 500),
+    # the transfer only starts when reservoir + collector fit under this
+    ("reservoir_full", "Reservoir capacity", "reservoir", 500),
 )
-PAIRS = (("boiler_topoff", "boiler_full"), ("collector_empty", "collector_full"),
-         ("reservoir_low", "reservoir_full"))
+PAIRS = (("boiler_topoff", "boiler_full"), ("collector_empty", "collector_full"))
 
 
 class SettingsScreen:
@@ -48,12 +47,14 @@ class SettingsScreen:
                 b.add_event_cb(lambda e, k=key, d=sign * step: self._adj(k, d),
                                lv.EVENT.LONG_PRESSED_REPEAT, None)
 
-        w.button(self.scr, "Defaults", self._defaults, 2, 201, 90, 37, w.GREY, w.FONT_S)
+        # full-width message line between the rows (end at y=167) and the
+        # buttons (y=201): two lines fit, enough for any Pico rejection reason
         self.status = w.label(self.scr, "", color=w.MUTED)
-        self.status.set_width(118)
-        self.status.set_pos(98, 205)
+        self.status.set_width(308)
+        self.status.set_pos(6, 170)
+        w.button(self.scr, "Defaults", self._defaults, 2, 201, 110, 37, w.GREY, w.FONT_S)
         self.btn_save = w.button(self.scr, lv.SYMBOL.SAVE + " Save", self._save,
-                                 222, 201, 96, 37, w.GREEN)
+                                 208, 201, 110, 37, w.GREEN)
         w.set_enabled(self.btn_save, False)
         self.status.set_text("Waiting for Pico limits...")
 
@@ -93,6 +94,8 @@ class SettingsScreen:
         for key, _, vessel, _ in ROWS:
             if self.values[key] > w.CAPACITY[vessel]:
                 return "%s over capacity" % key
+        if self.values["reservoir_full"] < self.values["collector_full"]:
+            return "reservoir smaller than a full collector"
         return None
 
     def _refresh(self, note):

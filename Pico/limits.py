@@ -1,9 +1,13 @@
 """Operator-adjustable vessel water-level limits (grams, post-tare).
 
-Only fill/drain setpoints are adjustable here. The hard safety limits (boiler
-overflow ceiling, dry-tank heater floor, vessel capacities) are fixed
-constants passed in by the caller and are never operator-settable; every
-change is validated against them before it is applied or persisted.
+Only fill/drain setpoints are adjustable here. The hard safety limits (each
+vessel's overflow ceiling, the dry-tank heater floor) are fixed constants
+passed in by the caller and are never operator-settable; every change is
+validated against them before it is applied or persisted.
+
+reservoir_full doubles as the reservoir's usable capacity: a transfer only
+starts when the reservoir can take the collector's entire contents without
+exceeding it (see Pico/main.py).
 """
 import json
 
@@ -12,20 +16,24 @@ KEYS = (
     "boiler_full",      # refill turns off at/above this
     "collector_empty",  # transfer stops at/below this
     "collector_full",   # transfer may start at/above this
-    "reservoir_low",    # transfer may start below this
-    "reservoir_full",   # transfer stops at/above this
+    "reservoir_full",   # usable reservoir capacity; transfer stops at/above this
 )
 
 MIN_GAP_G = 200         # minimum hysteresis between paired on/off setpoints
-OVERFLOW_MARGIN_G = 100  # boiler_full must stay this far below the overflow ceiling
+OVERFLOW_MARGIN_G = 100  # every FULL must stay this far below its overflow ceiling
+
+# Rejection reasons are shown to the operator on the HMI, so they use the
+# HMI's names for each setting and state the allowed value.
+FULL_NAMES = {"boiler": "Boiler FULL", "collector": "Collector FULL",
+              "reservoir": "Reservoir capacity"}
 
 
 class Limits:
-    def __init__(self, defaults, overflow_g, dry_floor_g, capacities, path="limits.json"):
-        self.defaults = dict(defaults)
-        self.overflow_g = overflow_g
+    def __init__(self, defaults, overflow, dry_floor_g, path="limits.json"):
+        """overflow: {"boiler": g, "collector": g, "reservoir": g} fixed ceilings."""
+        self.defaults = {k: defaults[k] for k in KEYS}
+        self.overflow = overflow
         self.dry_floor_g = dry_floor_g
-        self.capacities = capacities  # {"collector": g, "reservoir": g}
         self.path = path
         err = self.validate(self.defaults)
         if err:
@@ -44,19 +52,22 @@ class Limits:
             if not isinstance(v[k], (int, float)) or v[k] < 0:
                 return k + " must be a non-negative number"
         if v["boiler_topoff"] < self.dry_floor_g:
-            return "boiler_topoff below dry-tank floor %d" % self.dry_floor_g
+            return "Boiler refill level min %d g (dry-tank floor)" % self.dry_floor_g
         if v["boiler_topoff"] + MIN_GAP_G > v["boiler_full"]:
-            return "boiler_full must be >= boiler_topoff + %d" % MIN_GAP_G
-        if v["boiler_full"] + OVERFLOW_MARGIN_G > self.overflow_g:
-            return "boiler_full must be <= overflow %d - %d" % (self.overflow_g, OVERFLOW_MARGIN_G)
+            return "Boiler FULL must be %d g above the refill level" % MIN_GAP_G
         if v["collector_empty"] + MIN_GAP_G > v["collector_full"]:
-            return "collector_full must be >= collector_empty + %d" % MIN_GAP_G
-        if v["collector_full"] > self.capacities["collector"]:
-            return "collector_full exceeds capacity %d" % self.capacities["collector"]
-        if v["reservoir_low"] + MIN_GAP_G > v["reservoir_full"]:
-            return "reservoir_full must be >= reservoir_low + %d" % MIN_GAP_G
-        if v["reservoir_full"] > self.capacities["reservoir"]:
-            return "reservoir_full exceeds capacity %d" % self.capacities["reservoir"]
+            return "Collector FULL must be %d g above EMPTY" % MIN_GAP_G
+        for vessel in ("boiler", "collector", "reservoir"):
+            ceiling = self.overflow[vessel] - OVERFLOW_MARGIN_G
+            if v[vessel + "_full"] > ceiling:
+                return "%s max %d g (overflow at %d g)" % (
+                    FULL_NAMES[vessel], ceiling, self.overflow[vessel])
+        if v["reservoir_full"] < self.overflow["collector"]:
+            # the collector can legitimately hold up to its overflow ceiling;
+            # an empty reservoir must be able to take all of it, or a transfer
+            # could never fit and production would stay in STANDBY forever
+            return "Reservoir capacity min %d g (must hold a full collector)" % (
+                self.overflow["collector"])
         return None
 
     def update(self, changes):

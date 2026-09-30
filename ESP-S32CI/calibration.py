@@ -95,14 +95,14 @@ class CalibrationScreen:
         probe = name in PROBES
         for n, b in self.sel.items():
             b.set_style_bg_color(w.BLUE if n == name else w.PANEL, 0)
-        self.reading.set_text("--")
+        w.set_text(self.reading, "--")
         w.set_button_text(self.btn_tare, "ZERO probe" if probe else "1. TARE")
         for o in [self.btn_cal] + self.ref_row:
             if probe:
                 o.add_flag(lv.obj.FLAG.HIDDEN)
             else:
                 o.remove_flag(lv.obj.FLAG.HIDDEN)
-        self.hint.set_text(
+        w.set_text(self.hint, 
             "Put the probe in distilled water, then ZERO." if probe else
             "Tare with the platform empty, then CAL with the reference on it.")
 
@@ -128,28 +128,28 @@ class CalibrationScreen:
 
     def _send(self, cmd, hint):
         self.on_command(cmd)
-        self.hint.set_text(hint)
+        w.set_text(self.hint, hint)
 
     def on_tdscal(self, msg):
         name = msg.get("sensor", "").upper()
         if msg.get("ok"):
-            self.hint.set_text("%s zeroed (offset %.3f V)." % (name, msg.get("offset_v", 0)))
+            w.set_text(self.hint, "%s zeroed (offset %.3f V)." % (name, msg.get("offset_v", 0)))
         else:
-            self.hint.set_text("%s zero refused: %s" % (name, msg.get("err")))
+            w.set_text(self.hint, "%s zero refused: %s" % (name, msg.get("err")))
 
     def update(self, s):
         self.state = s.get("state")
         if self.scale in PROBES:
             ppm = s.get(self.scale + "_ppm")
-            self.reading.set_text("--" if ppm is None else "%.1f ppm" % ppm)
+            w.set_text(self.reading, "--" if ppm is None else "%.1f ppm" % ppm)
         else:
             g = s.get(self.scale + "_g")
-            self.reading.set_text("--" if g is None else "%.1f g" % g)
+            w.set_text(self.reading, "--" if g is None else "%.1f g" % g)
         self.reading.align(lv.ALIGN.TOP_MID, 0, 74)
         ok = self.state in SAFE_STATES
         w.set_enabled(self.btn_tare, ok)
         w.set_enabled(self.btn_cal, ok)
         if not ok:
-            self.hint.set_text("Stop the system first (state is %s)." % self.state)
+            w.set_text(self.hint, "Stop the system first (state is %s)." % self.state)
         elif self.hint.get_text().startswith("Stop the system"):
             self._select(self.scale)

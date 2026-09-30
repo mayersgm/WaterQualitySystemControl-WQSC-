@@ -17,6 +17,7 @@ RED = lv.color_hex(0xC62828)
 GREY = lv.color_hex(0x546E7A)
 TEAL = lv.color_hex(0x00838F)
 PURPLE = lv.color_hex(0x6A1B9A)
+DARK_TEXT = lv.color_hex(0x10151A)
 
 # Vessel capacities (grams of water), Phase0_Design.md sec 3.
 CAPACITY = {"boiler": 3785, "collector": 7570, "reservoir": 34065}
@@ -66,12 +67,56 @@ def button(parent, text, on_click, x, y, w, h, color=GREY, font=FONT_M):
     return b
 
 
+# LVGL allocates from the MicroPython heap. Every label set_text() reallocates
+# its text buffer and every style change forces a redraw with large temporary
+# buffers, so doing either with an unchanged value just fragments the heap
+# (which caused a MemoryError freeze). Remember the last value per object and
+# skip no-op updates. Keys use id(): all these objects live for the whole run.
+_last = {}
+
+
+def changed(obj, prop, value):
+    key = (id(obj), prop)
+    if _last.get(key) == value:
+        return False
+    _last[key] = value
+    return True
+
+
+def set_text(lbl, text):
+    if changed(lbl, "text", text):
+        lbl.set_text(text)
+
+
+# colors are the module-level lv.color_t constants above, so identity
+# comparison is enough to detect a change
+def set_text_color(obj, color):
+    if changed(obj, "text_color", color):
+        obj.set_style_text_color(color, 0)
+
+
+def set_bg(obj, color):
+    if changed(obj, "bg", color):
+        obj.set_style_bg_color(color, 0)
+
+
 def set_button_text(btn, text):
     # LVGL objects can't carry extra Python attributes; the label is child 0.
-    btn.get_child(0).set_text(text)
+    if changed(btn, "text", text):
+        btn.get_child(0).set_text(text)
+
+
+def set_hidden(obj, hidden):
+    if changed(obj, "hidden", hidden):
+        if hidden:
+            obj.add_flag(lv.obj.FLAG.HIDDEN)
+        else:
+            obj.remove_flag(lv.obj.FLAG.HIDDEN)
 
 
 def set_enabled(btn, enabled):
+    if not changed(btn, "enabled", enabled):
+        return
     if enabled:
         btn.remove_state(lv.STATE.DISABLED)
     else:

@@ -10,9 +10,9 @@ from limits import Limits  # noqa: E402
 PROD = {
     "boiler_topoff": 3200, "boiler_full": 3600,
     "collector_empty": 300, "collector_full": 7200,
-    "reservoir_low": 30000, "reservoir_full": 32000,
+    "reservoir_full": 32000,
 }
-CAPS = {"collector": 7570, "reservoir": 34065}
+OVERFLOW = {"boiler": 3700, "collector": 7400, "reservoir": 33500}
 
 
 class LimitsTest(unittest.TestCase):
@@ -23,11 +23,14 @@ class LimitsTest(unittest.TestCase):
     def tearDown(self):
         self.dir.cleanup()
 
-    def make(self, defaults=PROD, overflow=3700):
-        return Limits(defaults, overflow, 200, CAPS, path=self.path)
+    def make(self, defaults=PROD, overflow=OVERFLOW):
+        return Limits(defaults, overflow, 200, path=self.path)
 
     def test_defaults_used_without_file(self):
         self.assertEqual(self.make().values, PROD)
+
+    def test_old_reservoir_low_key_in_defaults_is_ignored(self):
+        self.assertEqual(self.make(defaults=dict(PROD, reservoir_low=30000)).values, PROD)
 
     def test_valid_update_applies_and_persists(self):
         self.assertIsNone(self.make().update({"boiler_full": 3400}))
@@ -43,15 +46,15 @@ class LimitsTest(unittest.TestCase):
     def test_rejections_leave_values_unchanged(self):
         lim = self.make()
         bad = [
-            {"boiler_full": 3650},                      # within 100g of overflow
-            {"boiler_topoff": 3500},                    # < 200g below full
-            {"boiler_topoff": 150},                     # below dry-tank floor
-            {"collector_full": 8000},                   # over capacity
-            {"collector_empty": 7100},                  # gap < 200
-            {"reservoir_low": 31900},                   # gap < 200
-            {"reservoir_full": 40000},                  # over capacity
-            {"nonsense": 1},                            # unknown key
-            {"boiler_full": -5},                        # negative
+            {"boiler_full": 3650},          # within 100g of boiler overflow
+            {"boiler_topoff": 3500},        # < 200g below full
+            {"boiler_topoff": 150},         # below dry-tank floor
+            {"collector_full": 7350},       # within 100g of collector overflow
+            {"collector_empty": 7100},      # gap < 200
+            {"reservoir_full": 33450},      # within 100g of reservoir overflow
+            {"reservoir_full": 7300},       # smaller than a collector at its overflow ceiling
+            {"reservoir_low": 1000},        # removed key
+            {"boiler_full": -5},            # negative
         ]
         for change in bad:
             self.assertIsNotNone(lim.update(change), change)
@@ -66,12 +69,12 @@ class LimitsTest(unittest.TestCase):
     def test_stored_values_invalid_for_new_constants_fall_back(self):
         self.make().update({"boiler_full": 3500})
         bench = dict(PROD, boiler_topoff=300, boiler_full=600)
-        lim = self.make(defaults=bench, overflow=900)  # 3500 now exceeds overflow
+        lim = self.make(defaults=bench, overflow=dict(OVERFLOW, boiler=900))
         self.assertEqual(lim["boiler_full"], 600)
 
     def test_invalid_defaults_raise(self):
         with self.assertRaises(ValueError):
-            self.make(overflow=900)
+            self.make(overflow=dict(OVERFLOW, boiler=900))
 
 
 if __name__ == "__main__":

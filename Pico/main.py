@@ -71,8 +71,17 @@ RESERVOIR_CAPACITY_G = 34065
 # BENCH TEST VALUES (only ~1-2kg of reference weight available) -- revert
 # every value marked "prod:" to the production number before Phase 6.
 BOILER_OVERFLOW_G = 900        # prod: 3700 -- hard safety cutoff, above any FULL setpoint
+COLLECTOR_OVERFLOW_G = 900     # prod: 7400 -- catches a transfer valve stuck closed
+RESERVOIR_OVERFLOW_G = 1200    # prod: 33500 -- catches a transfer valve stuck open
 DRY_TANK_FLOOR_G = 200         # heater never runs below this boiler weight
 REFILL_TIMEOUT_S = 90          # prod: 300 (10 for the step-6 timeout test)
+
+# Transfer-valve leak check (no timing -- gravity flow can be arbitrarily
+# slow). With the transfer closed the collector can only gain weight and the
+# reservoir can only gain by leaking, so a drop from the collector's peak AND
+# a rise from the reservoir's low point since closing means it's passing water.
+LEAK_DROP_G = 300
+LEAK_RISE_G = 150
 
 # Default fill/drain setpoints, used until the operator changes them from the
 # HMI (SET:...), which persists them to limits.json -- see limits.py.
@@ -81,9 +90,12 @@ DEFAULT_LIMITS = {
     "boiler_full": 600,        # prod: 3600 -- refill turns off at/above this
     "collector_empty": 100,    # prod: 300
     "collector_full": 500,     # prod: 7200
-    "reservoir_low": 400,      # prod: 30000 -- "under capacity" trigger to start a transfer
-    "reservoir_full": 800,     # prod: 32000
+    "reservoir_full": 1000,    # prod: 32000 -- usable reservoir capacity for the transfer rule
+                               #   (must be >= COLLECTOR_OVERFLOW_G, see limits.py)
 }
+
+FAULT_KEYS = ("tds1", "overflow", "refill_timeout", "valve_stuck",
+              "collector_overflow", "reservoir_overflow", "transfer_leak")
 
 TDS_FAULT_PPM = 50             # carried over from old system's contamination threshold
 
@@ -133,8 +145,10 @@ class Wqcs:
         self.tds2 = TDSSensor("tds2", adc_pin=28)   # distribution pump outlet
 
         self.limits = Limits(
-            DEFAULT_LIMITS, BOILER_OVERFLOW_G, DRY_TANK_FLOOR_G,
-            {"collector": COLLECTOR_CAPACITY_G, "reservoir": RESERVOIR_CAPACITY_G},
+            DEFAULT_LIMITS,
+            {"boiler": BOILER_OVERFLOW_G, "collector": COLLECTOR_OVERFLOW_G,
+             "reservoir": RESERVOIR_OVERFLOW_G},
+            DRY_TANK_FLOOR_G,
         )
 
         self.cmd = CMD_STOP     # safe default until the operator sends START
@@ -148,12 +162,13 @@ class Wqcs:
         self.refill_open = False
         self.refill_started_at = None
         self.transfer_active = False
+        # leak-check references, re-armed whenever the transfer valve closes
+        self._leak_ref_collector = None
+        self._leak_ref_reservoir = None
 
-        # Recoverable faults (need ACK/RESET to clear)
-        self.fault_tds1 = False
-        self.fault_overflow = False
-        self.fault_refill_timeout = False
-        self.fault_valve_stuck = False
+        # Recoverable faults (need ACK/RESET to clear). Any latched fault stops
+        # distillation: main valve closed, refill and heater off.
+        self.faults = {k: False for k in FAULT_KEYS}
         # Informational only, non-latching
         self.alert_tds2 = False
 
@@ -163,7 +178,11 @@ class Wqcs:
         self._db_collector_full = Debounce()
         self._db_collector_empty = Debounce()
         self._db_reservoir_full = Debounce()
-        self._db_reservoir_low = Debounce()
+        self._db_collector_overflow = Debounce()
+        self._db_reservoir_overflow = Debounce()
+        self._db_transfer_fits = Debounce()   # reservoir can take the whole collector
+        self._db_no_room = Debounce()         # ...and the opposite, for STANDBY
+        self._db_transfer_leak = Debounce()
         self._db_tds1_fault = Debounce()
         self._db_tds2_alert = Debounce()
         self._db_valve_stuck_open = Debounce()    # commanded closed, pressure still says flowing
@@ -192,15 +211,14 @@ class Wqcs:
         if verb in KNOWN_CMDS:
             self.cmd = verb
             if verb == CMD_RESET:
-                self.fault_tds1 = False
-                self.fault_overflow = False
-                self.fault_refill_timeout = False
-                self.fault_valve_stuck = False
+                self._clear_faults()
 
         elif verb == "TARE" and len(parts) == 2:
             name = parts[1].lower()
             if name in self.scales:
                 self.scales[name].tare()
+                self._leak_ref_collector = None  # weights jumped; re-arm leak check
+                self._leak_ref_reservoir = None
 
         elif verb == "CAL" and len(parts) == 3:
             name = parts[1].lower()
@@ -211,10 +229,7 @@ class Wqcs:
                     print(f"CAL error: {e}")
 
         elif verb == "ACK":
-            self.fault_tds1 = False
-            self.fault_overflow = False
-            self.fault_refill_timeout = False
-            self.fault_valve_stuck = False
+            self._clear_faults()
 
         # SET:<KEY>:<g>  or atomically  SET:<KEY>=<g>,<KEY>=<g>,...
         elif verb == "SET" and len(parts) in (2, 3):
@@ -252,6 +267,33 @@ class Wqcs:
         elif verb == "RESET_LIMITS":
             self.limits.reset()
             self._reply_limits(None)
+
+    def _check_transfer_leak(self, collector_g, reservoir_g):
+        """True (debounced) if the closed transfer valve is passing water.
+
+        While closed, track the collector's peak and the reservoir's low point;
+        distillate only raises the collector and the pump only lowers the
+        reservoir, so a collector drop plus a reservoir rise from those marks
+        means water is moving between them. Pump draw can only hide a leak
+        (the overflow faults are the backstop), never fake one."""
+        if self.transfer_active:
+            self._db_transfer_leak.check(False)
+            return False
+        if self._leak_ref_collector is None:
+            self._leak_ref_collector = collector_g
+            self._leak_ref_reservoir = reservoir_g
+        self._leak_ref_collector = max(self._leak_ref_collector, collector_g)
+        self._leak_ref_reservoir = min(self._leak_ref_reservoir, reservoir_g)
+        leaking = (self._leak_ref_collector - collector_g >= LEAK_DROP_G and
+                   reservoir_g - self._leak_ref_reservoir >= LEAK_RISE_G)
+        return self._db_transfer_leak.check(leaking)
+
+    def _clear_faults(self):
+        for k in self.faults:
+            self.faults[k] = False
+        # after a leak ACK, judge any further leaking from the current weights
+        self._leak_ref_collector = None
+        self._leak_ref_reservoir = None
 
     def _reply_limits(self, err):
         self._reply({"limits": self.limits.values, "ok": err is None, "err": err})
@@ -306,27 +348,38 @@ class Wqcs:
         collector_full = self._db_collector_full.check(collector_g >= lim["collector_full"])
         collector_empty = self._db_collector_empty.check(collector_g <= lim["collector_empty"])
         reservoir_full = self._db_reservoir_full.check(reservoir_g >= lim["reservoir_full"])
-        reservoir_low = self._db_reservoir_low.check(reservoir_g < lim["reservoir_low"])
+        # Capacity rule: a transfer only starts if the reservoir can take the
+        # collector's entire contents (gravity flow may be slow, so this is
+        # decided by weight up front rather than by timing the transfer).
+        fits = collector_g + reservoir_g <= lim["reservoir_full"]
+        transfer_fits = self._db_transfer_fits.check(fits)
+        no_room = self._db_no_room.check(not fits)
         tds1_bad = self._db_tds1_fault.check(tds1_ppm >= TDS_FAULT_PPM)
         tds2_bad = self._db_tds2_alert.check(tds2_ppm >= TDS_FAULT_PPM)
 
         # ---- safety interlocks, checked every loop, independent of state --
         if boiler_overflow:
-            self.fault_overflow = True
+            self.faults["overflow"] = True
+        if self._db_collector_overflow.check(collector_g >= COLLECTOR_OVERFLOW_G):
+            self.faults["collector_overflow"] = True   # e.g. transfer stuck closed
+        if self._db_reservoir_overflow.check(reservoir_g >= RESERVOIR_OVERFLOW_G):
+            self.faults["reservoir_overflow"] = True   # e.g. transfer stuck open
         if tds1_bad:
-            self.fault_tds1 = True
+            self.faults["tds1"] = True
+        if self._check_transfer_leak(collector_g, reservoir_g):
+            self.faults["transfer_leak"] = True
         self.alert_tds2 = tds2_bad  # non-latching, informational only
+        any_fault = any(self.faults.values())
 
-        # STANDBY condition: nowhere for more distillate to go. If the
-        # collector still has room, distillation can continue even with the
-        # reservoir full (collector just holds output until a transfer opens
-        # up room again) -- only pause once *both* are full.
-        downstream_full = collector_full and reservoir_full
+        # STANDBY: the collector is full and the reservoir can't take all of
+        # it, so there's nowhere for more distillate to go. Pause production
+        # until the reservoir is drawn down enough for a transfer to fit. This
+        # applies even mid-transfer (distillate arriving during a slow gravity
+        # transfer can push the total over capacity); the transfer itself
+        # carries on until the reservoir is FULL or the collector is EMPTY.
+        downstream_full = collector_full and no_room
 
-        main_close = (
-            self.fault_overflow or self.fault_tds1 or self.fault_refill_timeout
-            or self.fault_valve_stuck or downstream_full or not active
-        )
+        main_close = any_fault or downstream_full or not active
 
         # ---- boiler fill: main valve stays open through the whole sequence,
         # the refill solenoid does the actual metering -----------------------
@@ -341,7 +394,7 @@ class Wqcs:
             self.refill_started_at = None
         if self.refill_open and self.refill_started_at is not None:
             if time.ticks_diff(time.ticks_ms(), self.refill_started_at) > REFILL_TIMEOUT_S * 1000:
-                self.fault_refill_timeout = True
+                self.faults["refill_timeout"] = True
                 self.refill_open = False
                 self.refill_started_at = None
         REFILL_VALVE.value(1 if self.refill_open else 0)
@@ -354,7 +407,7 @@ class Wqcs:
             stuck_open = self._db_valve_stuck_open.check(not self.refill_open and not pressure_detected)
             stuck_closed = self._db_valve_stuck_closed.check(self.refill_open and pressure_detected)
             if stuck_open or stuck_closed:
-                self.fault_valve_stuck = True
+                self.faults["valve_stuck"] = True
         else:
             self._db_valve_stuck_open.check(False)
             self._db_valve_stuck_closed.check(False)
@@ -364,23 +417,27 @@ class Wqcs:
         # doesn't apply to STERILIZE, which doesn't produce collectible output.
         self.heater_on = (
             ((self.cmd == CMD_START and not downstream_full) or self.cmd == CMD_STERILIZE)
-            and not self.fault_tds1
-            and not self.fault_overflow
-            and not self.fault_refill_timeout
-            and not self.fault_valve_stuck
+            and not any_fault
             and boiler_g >= DRY_TANK_FLOOR_G
         )
         BOILER_RELAY.value(1 if self.heater_on else 0)
 
         # ---- collector -> reservoir transfer, gated on system being active --
-        if not self.transfer_active and active and collector_full and reservoir_low:
+        # Blocked while the collector may hold bad water (TDS-1) or the
+        # transfer path itself is suspect (leak / reservoir overflow). A
+        # collector overflow does NOT block it: transferring relieves it.
+        blocked = (self.faults["tds1"] or self.faults["transfer_leak"]
+                   or self.faults["reservoir_overflow"])
+        if (not self.transfer_active and active and not blocked
+                and collector_full and transfer_fits):
             self.transfer_active = True
-        if self.transfer_active and (not active or collector_empty or reservoir_full):
+            self._leak_ref_collector = self._leak_ref_reservoir = None
+        if self.transfer_active and (not active or blocked or collector_empty or reservoir_full):
             self.transfer_active = False
         TRANSFER_VALVE.value(1 if self.transfer_active else 0)
 
         # ---- derived state, reported for the HMI/monitor --------------------
-        if self.fault_tds1 or self.fault_overflow or self.fault_refill_timeout or self.fault_valve_stuck:
+        if any_fault:
             state = STATE_FAULT
         elif self.cmd == CMD_STOP:
             state = STATE_STOPPED
@@ -409,12 +466,7 @@ class Wqcs:
             },
             "pressure_sw": pressure_detected,
             "heater": int(self.heater_on),
-            "fault": {
-                "tds1": self.fault_tds1,
-                "overflow": self.fault_overflow,
-                "refill_timeout": self.fault_refill_timeout,
-                "valve_stuck": self.fault_valve_stuck,
-            },
+            "fault": dict(self.faults),
             "alert": {"tds2": self.alert_tds2},
         }
         # Local print on the Pico's own USB console -- independent of the

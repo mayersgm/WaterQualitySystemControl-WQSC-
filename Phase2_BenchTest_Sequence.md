@@ -70,6 +70,14 @@ Legend: G=green LED (main valve), B=blue LED (transfer valve), R=red LED
   regardless of anything else. `ACK` to clear (bring weight back down first,
   otherwise it'll immediately re-trip).
 
+> **Superseded 2026-09-29 (steps 8–9):** STANDBY and the transfer trigger now
+> follow the capacity rule in `Phase0_Design.md` §7. A transfer starts when the
+> collector is FULL and `reservoir + collector ≤ reservoir FULL`. STANDBY happens
+> when the collector is FULL and it doesn't fit. Reservoir LOW no longer exists.
+> The collector-overflow, reservoir-overflow and transfer-leak faults are new.
+> The logic is covered by `tests/test_control.py`. Re-run these two steps on the
+> bench against the new rule.
+
 ## 8. STANDBY (collector + reservoir both full)
 - Reset boiler to a normal mid-range weight (e.g. 3400g) so heater is
   otherwise eligible to run. Send `START` fresh (or `ACK`+re-add weight if
