@@ -1,12 +1,19 @@
-"""Scale calibration screen: TARE (empty platform) then CAL with a reference weight.
+"""Calibration screen.
+
+Scales: TARE (empty platform) then CAL with a reference weight.
+TDS probes: ZERO with the probe in clean (distilled) water; the Pico refuses
+an offset too large to be clean water.
 
 Commands are only enabled while the system is parked (STOPPED / EMPTY / FAULT)
-so nobody tares a scale while valves may be open and water moving.
+so nobody calibrates while valves may be open and water moving.
 """
 import lvgl as lv
 import widgets as w
 
-SCALES = ("boiler", "collector", "reservoir")
+# key, selector label; scales report "<key>_g", probes "<key>_ppm"
+ITEMS = (("boiler", "BOILER"), ("collector", "COLLECT"), ("reservoir", "RESERV"),
+         ("tds1", "TDS-1"), ("tds2", "TDS-2"))
+PROBES = ("tds1", "tds2")
 SAFE_STATES = ("STOPPED", "EMPTY", "FAULT")
 
 
@@ -51,13 +58,12 @@ class CalibrationScreen:
 
         head = w.box(self.scr, 0, 0, 320, 30, w.PANEL, radius=0)
         w.button(head, lv.SYMBOL.LEFT + " Back", on_back, 2, 2, 70, 26, w.GREY, w.FONT_S)
-        w.label(head, "SCALE CALIBRATION", w.FONT_M).align(lv.ALIGN.LEFT_MID, 84, 0)
+        w.label(head, "CALIBRATION", w.FONT_M).align(lv.ALIGN.LEFT_MID, 84, 0)
 
         self.sel = {}
-        for i, name in enumerate(SCALES):
-            self.sel[name] = w.button(self.scr, name.upper(),
-                                      lambda n=name: self._select(n),
-                                      4 + i * 105, 36, 101, 30, w.PANEL, w.FONT_S)
+        for i, (key, text) in enumerate(ITEMS):
+            self.sel[key] = w.button(self.scr, text, lambda k=key: self._select(k),
+                                     4 + i * 63, 36, 59, 30, w.PANEL, w.FONT_S)
 
         self.reading = w.label(self.scr, "--", w.FONT_L)
         self.reading.align(lv.ALIGN.TOP_MID, 0, 74)
@@ -65,13 +71,16 @@ class CalibrationScreen:
         self.btn_tare = w.button(self.scr, "1. TARE", self._tare, 4, 110, 150, 36, w.BLUE)
         self.btn_cal = w.button(self.scr, "2. CAL", self._cal, 166, 110, 150, 36, w.GREEN)
 
-        w.label(self.scr, "Reference:", color=w.MUTED).set_pos(6, 162)
-        for text, delta, x in (("-100", -100, 76), ("-10", -10, 124)):
-            w.button(self.scr, text, lambda d=delta: self._adj(d), x, 154, 44, 30, w.PANEL, w.FONT_S)
+        # reference-weight row: scales only
+        self.ref_row = [w.label(self.scr, "Reference:", color=w.MUTED)]
+        self.ref_row[0].set_pos(6, 162)
+        for text, delta, x in (("-100", -100, 76), ("-10", -10, 124),
+                               ("+10", 10, 226), ("+100", 100, 272)):
+            self.ref_row.append(w.button(self.scr, text, lambda d=delta: self._adj(d),
+                                         x, 154, 44, 30, w.PANEL, w.FONT_S))
         self.ref_lbl = w.label(self.scr, "", w.FONT_M)
         self.ref_lbl.set_pos(174, 160)
-        for text, delta, x in (("+10", 10, 226), ("+100", 100, 272)):
-            w.button(self.scr, text, lambda d=delta: self._adj(d), x, 154, 44, 30, w.PANEL, w.FONT_S)
+        self.ref_row.append(self.ref_lbl)
 
         self.hint = w.label(self.scr, "", color=w.MUTED)
         self.hint.set_width(312)
@@ -83,9 +92,19 @@ class CalibrationScreen:
 
     def _select(self, name):
         self.scale = name
+        probe = name in PROBES
         for n, b in self.sel.items():
             b.set_style_bg_color(w.BLUE if n == name else w.PANEL, 0)
         self.reading.set_text("--")
+        w.set_button_text(self.btn_tare, "ZERO probe" if probe else "1. TARE")
+        for o in [self.btn_cal] + self.ref_row:
+            if probe:
+                o.add_flag(lv.obj.FLAG.HIDDEN)
+            else:
+                o.remove_flag(lv.obj.FLAG.HIDDEN)
+        self.hint.set_text(
+            "Put the probe in distilled water, then ZERO." if probe else
+            "Tare with the platform empty, then CAL with the reference on it.")
 
     def _adj(self, delta):
         self.ref_g = max(100, min(20000, self.ref_g + delta))
@@ -93,6 +112,10 @@ class CalibrationScreen:
 
     def _tare(self):
         name = self.scale.upper()
+        if self.scale in PROBES:
+            self.confirm.ask("Is the %s probe in clean (distilled) water?" % name,
+                             lambda: self._send("TDSCAL:" + name, "Zeroing %s..." % name))
+            return
         self.confirm.ask("Is the %s platform completely empty?" % name,
                          lambda: self._send("TARE:" + name,
                                             "Sent TARE. Reading should settle near 0 g."))
@@ -107,10 +130,21 @@ class CalibrationScreen:
         self.on_command(cmd)
         self.hint.set_text(hint)
 
+    def on_tdscal(self, msg):
+        name = msg.get("sensor", "").upper()
+        if msg.get("ok"):
+            self.hint.set_text("%s zeroed (offset %.3f V)." % (name, msg.get("offset_v", 0)))
+        else:
+            self.hint.set_text("%s zero refused: %s" % (name, msg.get("err")))
+
     def update(self, s):
         self.state = s.get("state")
-        g = s.get(self.scale + "_g")
-        self.reading.set_text("--" if g is None else "%.1f g" % g)
+        if self.scale in PROBES:
+            ppm = s.get(self.scale + "_ppm")
+            self.reading.set_text("--" if ppm is None else "%.1f ppm" % ppm)
+        else:
+            g = s.get(self.scale + "_g")
+            self.reading.set_text("--" if g is None else "%.1f g" % g)
         self.reading.align(lv.ALIGN.TOP_MID, 0, 74)
         ok = self.state in SAFE_STATES
         w.set_enabled(self.btn_tare, ok)
@@ -118,4 +152,4 @@ class CalibrationScreen:
         if not ok:
             self.hint.set_text("Stop the system first (state is %s)." % self.state)
         elif self.hint.get_text().startswith("Stop the system"):
-            self.hint.set_text("Tare with the platform empty, then CAL with the reference on it.")
+            self._select(self.scale)

@@ -30,8 +30,22 @@ def mpremote(port, *args, timeout=30):
     return r.stdout
 
 
+def hard_reset(port):
+    """Pulse EN via the USB-serial RTS line (auto-reset circuit: RTS->EN,
+    DTR->IO0). Works even when no REPL is reachable, unlike mpremote reset."""
+    s = serial.Serial()
+    s.port, s.baudrate = port, 115200
+    s.dtr = s.rts = False
+    s.open()
+    s.dtr = False      # IO0 high: normal boot, not the bootloader
+    s.rts = True       # EN low: hold in reset
+    time.sleep(0.15)
+    s.rts = False      # release
+    s.close()
+
+
 def interrupt_at_boot(port, seconds=4.0):
-    mpremote(port, "reset")
+    hard_reset(port)
     s = serial.Serial()
     s.port, s.baudrate, s.timeout = port, 115200, 0.05
     s.dtr = s.rts = False
@@ -74,7 +88,7 @@ def main():
         mpremote(args.port, "cp", f, ":" + os.path.basename(f))
         print("copied", os.path.basename(f))
     if not args.no_reset:
-        mpremote(args.port, "reset")
+        hard_reset(args.port)
         print("reset -- HMI restarting")
 
 

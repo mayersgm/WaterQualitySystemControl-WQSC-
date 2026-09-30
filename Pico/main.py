@@ -231,6 +231,21 @@ class Wqcs:
                 err = "malformed SET"
             self._reply_limits(err)
 
+        # TDSCAL:TDS1 / TDSCAL:TDS2 -- zero the probe (must be in clean water)
+        elif verb == "TDSCAL" and len(parts) == 2:
+            sensor = {"TDS1": self.tds1, "TDS2": self.tds2}.get(parts[1])
+            if sensor is None:
+                self._reply({"tdscal": {"sensor": parts[1].lower(), "ok": False,
+                                        "err": "unknown sensor"}})
+            else:
+                try:
+                    v = sensor.calibrate_zero()
+                    self._reply({"tdscal": {"sensor": sensor.name, "ok": True,
+                                            "offset_v": round(v, 4)}})
+                except ValueError as e:
+                    self._reply({"tdscal": {"sensor": sensor.name, "ok": False,
+                                            "err": str(e)}})
+
         elif verb == "GET" and len(parts) == 2 and parts[1] == "LIMITS":
             self._reply_limits(None)
 
@@ -239,7 +254,10 @@ class Wqcs:
             self._reply_limits(None)
 
     def _reply_limits(self, err):
-        msg = {"limits": self.limits.values, "ok": err is None, "err": err}
+        self._reply({"limits": self.limits.values, "ok": err is None, "err": err})
+
+    def _reply(self, msg):
+        """Queue a one-off reply line for core 1 to send to the ESP32."""
         print(msg)
         with self._outbox_lock:
             self._outbox.append(json.dumps(msg).encode() + b"\n")

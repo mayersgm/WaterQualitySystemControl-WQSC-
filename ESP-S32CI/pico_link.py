@@ -28,6 +28,8 @@ class PicoLink:
         # Latest one-off {"limits": ..., "ok": ..., "err": ...} reply, sent by
         # the Pico in response to GET:LIMITS / SET:... / RESET_LIMITS.
         self.last_limits = None
+        # Latest {"tdscal": {"sensor", "ok", "offset_v" | "err"}} reply to TDSCAL:...
+        self.last_tdscal = None
         self.link_errors = 0  # count of overflow/decode failures, for diagnostics
         self.last_bad_line = None  # most recent line that failed to parse
 
@@ -56,6 +58,8 @@ class PicoLink:
                 continue
             if "limits" in msg:
                 self.last_limits = msg
+            elif "tdscal" in msg:
+                self.last_tdscal = msg["tdscal"]
             else:
                 newest = msg
         if newest is not None:

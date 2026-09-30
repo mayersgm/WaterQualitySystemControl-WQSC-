@@ -59,13 +59,23 @@ class TDSSensor:
         except (OSError, KeyError, ValueError):
             return 0.0
 
+    # Clean/distilled water reads near 0 V. Refusing a larger offset stops a
+    # probe zeroed in dirty water from masking real contamination later.
+    MAX_ZERO_OFFSET_V = 0.2
+
     def calibrate_zero(self, samples=20):
-        """Call with the probe in clean/reference water to zero it out."""
+        """Call with the probe in clean (distilled) water to zero it out.
+        Returns the new offset voltage; raises ValueError (and keeps the old
+        offset) if the reading is too high to be clean water."""
         total = 0
         for _ in range(samples):
             total += self.adc.read_u16()
             time.sleep(0.02)
-        self.offset_voltage = (total / samples / self.adc_res) * self.vref
+        offset = (total / samples / self.adc_res) * self.vref
+        if offset > self.MAX_ZERO_OFFSET_V:
+            raise ValueError("%.3f V too high for clean water (max %.2f V)"
+                             % (offset, self.MAX_ZERO_OFFSET_V))
+        self.offset_voltage = offset
         with open(self.cal_file, "w") as f:
             json.dump({"offset_voltage": self.offset_voltage}, f)
         return self.offset_voltage

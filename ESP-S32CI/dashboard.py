@@ -3,7 +3,15 @@ import lvgl as lv
 import widgets as w
 from icons import Flame, Drops, Valve, FlowArrow
 
-BAR_Y, BAR_H = 20, 86
+BAR_Y, BAR_H = 18, 70
+VESSEL_Y, VESSEL_H = 32, 116
+TILE_Y, TILE_H = 151, 46
+
+TDS_FAULT_PPM = 50                 # mirrors Pico/main.py TDS_FAULT_PPM
+TDS_WARN_PPM = TDS_FAULT_PPM * 4 // 5
+
+FAULT_NAMES = {"tds1": "TDS-1", "overflow": "OVERFLOW",
+               "refill_timeout": "REFILL T/O", "valve_stuck": "VALVE STUCK"}
 
 STATE_STYLE = {
     "RUN": (w.GREEN, "RUN - distilling"),
@@ -25,7 +33,7 @@ MARKERS = {
 class _Vessel:
     def __init__(self, parent, name, title, x):
         self.name = name
-        self.panel = w.box(parent, x, 34, 104, 134)
+        self.panel = w.box(parent, x, VESSEL_Y, 104, VESSEL_H)
         w.label(self.panel, title, color=w.MUTED).set_pos(6, 3)
         self.bar = lv.bar(self.panel)
         self.bar.set_pos(8, BAR_Y)
@@ -42,7 +50,7 @@ class _Vessel:
             m.add_flag(lv.obj.FLAG.HIDDEN)
             self.markers[key] = m
         self.grams = w.label(self.panel, "--", w.FONT_M)
-        self.grams.set_pos(6, 110)
+        self.grams.set_pos(6, BAR_Y + BAR_H + 4)
         self.pct = w.label(self.panel, "", color=w.MUTED)
         self.pct.set_pos(56, 3)
 
@@ -60,8 +68,28 @@ class _Vessel:
                 m.remove_flag(lv.obj.FLAG.HIDDEN)
 
 
+class _Tile:
+    """Sensor readout: small title, large value, colored by status."""
+
+    def __init__(self, parent, title, x):
+        self.panel = w.box(parent, x, TILE_Y, 104, TILE_H)
+        w.label(self.panel, title, color=w.MUTED).set_pos(6, 3)
+        self.value = w.label(self.panel, "--", w.FONT_L, w.MUTED)
+        self.value.set_pos(6, 18)
+
+    def set(self, text, color):
+        self.value.set_text(text)
+        self.value.set_style_text_color(color, 0)
+
+
+def _tds_color(ppm, faulted):
+    if faulted or ppm >= TDS_FAULT_PPM:
+        return w.RED
+    return w.AMBER if ppm >= TDS_WARN_PPM else w.GREEN
+
+
 class Dashboard:
-    def __init__(self, on_command, on_cal, on_levels):
+    def __init__(self, on_command, on_cal, on_levels, on_ack):
         self.on_command = on_command
         self.scr = w.screen()
         self.cmd = None
@@ -73,6 +101,10 @@ class Dashboard:
         w.button(self.banner, "CAL", on_cal, 222, 2, 44, 26, w.PANEL, w.FONT_S)
         w.button(self.banner, lv.SYMBOL.SETTINGS + " LVL", on_levels, 270, 2, 48, 26,
                  w.PANEL, w.FONT_S)
+        # shown only while a fault is latched; the fault names go in state_lbl
+        self.btn_ack = w.button(self.banner, "ACK", on_ack,
+                                166, 2, 52, 26, lv.color_hex(0x7F0000), w.FONT_M)
+        self.btn_ack.add_flag(lv.obj.FLAG.HIDDEN)
 
         self.vessels = {
             "boiler": _Vessel(self.scr, "boiler", "BOILER", 2),
@@ -80,28 +112,18 @@ class Dashboard:
             "reservoir": _Vessel(self.scr, "reservoir", "RESERVOIR", 214),
         }
         bp = self.vessels["boiler"].panel
-        self.main_valve = Valve(bp, 54, 20, "MAIN")
-        self.drops = Drops(bp, 58, 36)
-        self.flame = Flame(bp, 62, 72)
-        self.psw = Valve(bp, 54, 112, "PSW")
+        self.main_valve = Valve(bp, 54, 18, "MAIN")
+        self.drops = Drops(bp, 58, 32, height=20)
+        self.flame = Flame(bp, 62, 56)
+        self.psw = Valve(bp, 58, 94, "PSW")
         cp = self.vessels["collector"].panel
-        w.label(cp, "XFER", color=w.MUTED).set_pos(58, 48)
-        self.flow = FlowArrow(cp, 56, 64)
+        w.label(cp, "XFER", color=w.MUTED).set_pos(58, 36)
+        self.flow = FlowArrow(cp, 56, 52)
         self.animated = (self.flame, self.drops, self.flow)
 
-        self.readouts = w.box(self.scr, 0, 171, 320, 26, w.PANEL, radius=0)
-        self.readout_lbl = w.label(self.readouts, "", w.FONT_M)
-        self.readout_lbl.align(lv.ALIGN.LEFT_MID, 8, 0)
-        self.tds2_badge = w.label(self.readouts, "TDS2 HIGH", color=w.AMBER)
-        self.tds2_badge.align(lv.ALIGN.RIGHT_MID, -8, 0)
-        self.tds2_badge.add_flag(lv.obj.FLAG.HIDDEN)
-
-        self.fault_bar = w.box(self.scr, 0, 171, 320, 26, w.RED, radius=0)
-        self.fault_lbl = w.label(self.fault_bar, "", w.FONT_S)
-        self.fault_lbl.align(lv.ALIGN.LEFT_MID, 8, 0)
-        w.button(self.fault_bar, "ACK", lambda: on_command("ACK"), 262, 1, 56, 24,
-                 lv.color_hex(0x7F0000), w.FONT_M)
-        self.fault_bar.add_flag(lv.obj.FLAG.HIDDEN)
+        self.t_temp = _Tile(self.scr, "BOILER TEMP", 2)
+        self.t_tds1 = _Tile(self.scr, "TDS-1 DISTILL", 108)
+        self.t_tds2 = _Tile(self.scr, "TDS-2 OUTLET", 214)
 
         self.btn_start = w.button(self.scr, "START", self._start_stop, 2, 201, 76, 37, w.GREEN)
         self.btn_ster = w.button(self.scr, "STERILIZE", self._sterilize, 82, 201, 76, 37,
@@ -133,10 +155,19 @@ class Dashboard:
         color, text = STATE_STYLE.get(state, (w.GREY, state))
         if state == "RUN" and self.cmd == "STERILIZE":
             text = "RUN - sterilizing"
+        faults = [k for k, on in s.get("fault", {}).items() if on]
+        if faults:
+            color = w.RED
+            text = "FAULT " + "+".join(FAULT_NAMES.get(k, k) for k in faults)
+            self.btn_ack.remove_flag(lv.obj.FLAG.HIDDEN)
+        else:
+            self.btn_ack.add_flag(lv.obj.FLAG.HIDDEN)
         self.banner.set_style_bg_color(color, 0)
         self.state_lbl.set_style_text_color(
             lv.color_hex(0x10151A) if color == w.AMBER else w.TEXT, 0)
+        self.state_lbl.set_style_text_font(w.FONT_S if faults else w.FONT_M, 0)
         self.state_lbl.set_text(text)
+        self.state_lbl.align(lv.ALIGN.LEFT_MID, 8, 0)
 
         for name, v in self.vessels.items():
             v.set_weight(s.get(name + "_g"))
@@ -149,20 +180,14 @@ class Dashboard:
         self.psw.set_active(bool(s.get("pressure_sw")))
 
         temp = s.get("temp_f")
-        self.readout_lbl.set_text("%s F   TDS1 %d   TDS2 %d ppm" % (
-            "--" if temp is None else "%.0f" % temp,
-            s.get("tds1_ppm") or 0, s.get("tds2_ppm") or 0))
-        if s.get("alert", {}).get("tds2"):
-            self.tds2_badge.remove_flag(lv.obj.FLAG.HIDDEN)
+        if temp is None:
+            self.t_temp.set("-- F", w.MUTED)  # sensor missing / out of range
         else:
-            self.tds2_badge.add_flag(lv.obj.FLAG.HIDDEN)
-
-        faults = [k for k, on in s.get("fault", {}).items() if on]
-        if faults:
-            self.fault_lbl.set_text("FAULT: " + ", ".join(faults))
-            self.fault_bar.remove_flag(lv.obj.FLAG.HIDDEN)
-        else:
-            self.fault_bar.add_flag(lv.obj.FLAG.HIDDEN)
+            self.t_temp.set("%.0f F" % temp, w.AMBER if self.flame.active else w.TEXT)
+        tds1 = s.get("tds1_ppm") or 0
+        tds2 = s.get("tds2_ppm") or 0
+        self.t_tds1.set("%d ppm" % tds1, _tds_color(tds1, s.get("fault", {}).get("tds1")))
+        self.t_tds2.set("%d ppm" % tds2, _tds_color(tds2, s.get("alert", {}).get("tds2")))
 
         w.set_button_text(self.btn_start, "STOP" if self.cmd == "START" else "START")
         self.btn_start.set_style_bg_color(w.RED if self.cmd == "START" else w.GREEN, 0)

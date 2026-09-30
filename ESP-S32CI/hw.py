@@ -28,8 +28,13 @@ _display = None
 _indev = None
 
 
-def init():
-    """Bring up display + touch + LVGL task handler. Returns (display, indev)."""
+def init(exception_hook=None):
+    """Bring up display + touch + LVGL task handler. Returns (display, indev).
+
+    exception_hook(e) is called for any exception raised inside LVGL's render
+    cycle (event callbacks, lv timers). Without one, the stock TaskHandler
+    prints the error and deinit()s itself -- rendering and touch stop for good
+    while the rest of the program keeps running (a "frozen" screen)."""
     global _display, _indev
     if _display is not None:
         return _display, _indev
@@ -64,5 +69,8 @@ def init():
 
     # Runs lv.task_handler() from a hardware timer every ~33 ms, so the main
     # loop only has to poll the Pico link and update widgets.
-    task_handler.TaskHandler()
+    if exception_hook is None:
+        task_handler.TaskHandler()
+    else:
+        task_handler.TaskHandler(exception_hook=exception_hook)
     return _display, _indev
