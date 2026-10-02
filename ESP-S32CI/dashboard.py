@@ -13,7 +13,8 @@ TDS_WARN_PPM = TDS_FAULT_PPM * 4 // 5
 FAULT_NAMES = {"tds1": "TDS-1", "overflow": "BOILER OVFL",
                "refill_timeout": "REFILL T/O", "valve_stuck": "VALVE STUCK",
                "collector_overflow": "COLL OVFL", "reservoir_overflow": "RES OVFL",
-               "transfer_leak": "XFER LEAK", "controller": "CTRL STALL"}
+               "transfer_leak": "XFER LEAK", "controller": "CTRL STALL",
+               "sensor": "SENSOR"}
 
 STATE_STYLE = {
     "RUN": (w.GREEN, "RUN - distilling"),

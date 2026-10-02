@@ -103,7 +103,8 @@ DEFAULT_LIMITS = {
 
 FAULT_KEYS = ("tds1", "overflow", "refill_timeout", "valve_stuck",
               "collector_overflow", "reservoir_overflow", "transfer_leak",
-              "controller")   # control loop raised or stalled (see loop_once/supervise)
+              "controller",   # control loop raised or stalled (see loop_once/supervise)
+              "sensor")       # SENSOR_FAIL_PASSES consecutive failed sensor reads
 
 TDS_FAULT_PPM = 50             # carried over from old system's contamination threshold
 
@@ -114,6 +115,7 @@ LOOP_PERIOD_S = 1.0
 # dead after an uncaught exception). Before 2026-10-01, core 1 kept re-sending
 # the last status with the heater on while nothing was enforcing the interlocks.
 STALL_MS = 5000
+SENSOR_FAIL_PASSES = 5         # consecutive failed reads before the "sensor" fault latches
 
 # Operator commands. RUN/STANDBY are not commands -- they're reported below
 # as derived *state* (what the system is actually doing), since sending RUN
@@ -203,6 +205,7 @@ class Wqcs:
         self.last_status = {}
         self._beat = time.ticks_ms()   # core 0 heartbeat, written once per pass
         self._stalled = False          # set by core 1 when the heartbeat goes stale
+        self._sensor_fails = 0
 
     # -- command queue: core 1 (UART) is the producer, core 0 the consumer --
     def queue_command(self, line):
@@ -339,14 +342,19 @@ class Wqcs:
             self._control_step()
         except Exception as e:
             print("control loop error:", repr(e))
-            all_outputs_off()
-            self.heater_on = self.refill_open = self.transfer_active = False
-            self.refill_started_at = None
             self.faults["controller"] = True
-            self.last_status = dict(self.last_status, state=STATE_FAULT, heater=0,
-                                    valves={"main": 0, "refill": 0, "transfer": 0},
-                                    fault=dict(self.faults))
+            self._fail_safe(e)
         self._beat = time.ticks_ms()
+
+    def _fail_safe(self, err):
+        """Everything off, and publish it: core 1 keeps sending last_status,
+        so leaving it untouched would show the heater on and stale weights."""
+        all_outputs_off()
+        self.heater_on = self.refill_open = self.transfer_active = False
+        self.refill_started_at = None
+        self.last_status = dict(self.last_status, state=STATE_FAULT, heater=0,
+                                valves={"main": 0, "refill": 0, "transfer": 0},
+                                fault=dict(self.faults), error=repr(err)[:80])
 
     def supervise(self, now):
         """Core 1, every pass: True while core 0's control loop is alive. If it
@@ -375,14 +383,12 @@ class Wqcs:
             # stale or unknown state — force everything off and retry
             # next loop rather than crashing core 0.
             print(f"Sensor read error: {e}")
-            MAIN_VALVE.value(0)
-            REFILL_VALVE.value(0)
-            TRANSFER_VALVE.value(0)
-            BOILER_RELAY.value(0)
-            self.heater_on = False
-            self.refill_open = False
-            self.transfer_active = False
+            self._sensor_fails += 1
+            if self._sensor_fails >= SENSOR_FAIL_PASSES:
+                self.faults["sensor"] = True
+            self._fail_safe(e)
             return
+        self._sensor_fails = 0
 
         # Only START drives the fill/refill/transfer maintenance loop.
         # STERILIZE uses whatever water is already in the boiler; STOP/EMPTY/

@@ -151,6 +151,13 @@ sending status, so the ESP32 shows NO LINK and pushes an alert rather than
 displaying frozen values. Added 2026-10-01 after core 0 stopped with the heater
 on while core 1 kept re-sending its last status.
 
+A failed sensor read (e.g. `HX711 not ready` after its 1 s timeout) forces
+every output off and publishes that in the status (`state` FAULT, `heater` 0,
+plus an `error` string), so the status never shows stale values. A single
+glitch is retried on the next pass. `SENSOR_FAIL_PASSES` (5) consecutive
+failures latch the `sensor` fault, which needs `ACK`. `error` also carries
+the exception text for a `controller` fault.
+
 `fault` entries are recoverable-halt conditions (need `ACK`); `alert` entries
 (TDS-2) are informational only and never gate an actuator. The boiler drain
 valve is manual (see §1) and never appears in status — it isn't Pico-controlled.

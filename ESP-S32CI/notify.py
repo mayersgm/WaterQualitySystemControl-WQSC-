@@ -31,7 +31,7 @@ FAULT_NAMES = {"tds1": "TDS-1 distillate", "overflow": "Boiler overflow",
                "refill_timeout": "Refill timeout", "valve_stuck": "Refill valve stuck",
                "collector_overflow": "Collector overflow",
                "reservoir_overflow": "Reservoir overflow", "transfer_leak": "Transfer leak",
-               "controller": "Pico control loop failed"}
+               "controller": "Pico control loop failed", "sensor": "Sensor read failing"}
 
 # ntfy priorities: 5 = urgent (breaks through Focus on iOS), 3 = default
 URGENT, HIGH, DEFAULT, LOW = 5, 4, 3, 2

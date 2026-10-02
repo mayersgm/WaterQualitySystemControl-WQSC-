@@ -74,7 +74,7 @@ background:#263445;font-size:15px;opacity:0;transition:opacity .3s;pointer-event
 const TDS_FAULT = 50, TDS_WARN = 40;
 const FAULTS = {tds1:"TDS-1", overflow:"BOILER OVFL", refill_timeout:"REFILL T/O",
   valve_stuck:"VALVE STUCK", collector_overflow:"COLL OVFL", reservoir_overflow:"RES OVFL",
-  transfer_leak:"XFER LEAK", controller:"CTRL STALL"};
+  transfer_leak:"XFER LEAK", controller:"CTRL STALL", sensor:"SENSOR"};
 const STATES = {RUN:["green","RUN - distilling"], IDLE:["blue","IDLE - filling boiler"],
   STANDBY:["amber","STANDBY - no room"], STOPPED:["grey","STOPPED"],
   EMPTY:["teal","EMPTY - drain mode"], FAULT:["red","FAULT"]};
@@ -146,7 +146,8 @@ function render(d){
     setBanner(c, t);
   }
   $("ack").style.display = faults.length ? "block" : "none";
-  $("age").textContent = d.age_ms == null ? "no data yet" : `updated ${Math.round(d.age_ms/1000)} s ago`;
+  $("age").textContent = s.error ? "Pico: " + s.error
+    : d.age_ms == null ? "no data yet" : `updated ${Math.round(d.age_ms/1000)} s ago`;
   $("wifi").textContent = d.rssi == null ? "" : `WiFi ${d.rssi} dBm`;
 
   for (const v of ["boiler","collector","reservoir"]) vessel(v, s[v+"_g"], d.limits);

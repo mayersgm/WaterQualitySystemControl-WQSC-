@@ -201,6 +201,38 @@ class ControlTest(unittest.TestCase):
         self.assertNotIn("controller", self.faults())
         self.assertEqual(self.w.last_status["heater"], 1)
 
+    def break_scale(self, name="boiler"):
+        good = self.w.scales[name]
+
+        class Dead:
+            def read_grams(self):
+                raise OSError("HX711 not ready")
+        self.w.scales[name] = Dead()
+        return good
+
+    def test_sensor_glitch_publishes_safe_status_without_latching(self):
+        self.heat()
+        good = self.break_scale()
+        s = self.step(1)
+        self.assertEqual(self.outputs(), [0, 0, 0, 0])
+        self.assertEqual((s["heater"], s["state"]), (0, "FAULT"))   # not the stale "heater 1"
+        self.assertIn("HX711", s["error"])
+        self.assertEqual(self.faults(), set())
+        self.w.scales["boiler"] = good                            # glitch over
+        s = self.step()
+        self.assertEqual((s["heater"], s["state"]), (1, "RUN"))
+        self.assertNotIn("error", s)
+
+    def test_persistent_sensor_failure_latches_fault(self):
+        self.heat()
+        good = self.break_scale("reservoir")
+        self.step(self.main.SENSOR_FAIL_PASSES - 1)
+        self.assertEqual(self.faults(), set())
+        self.step(1)
+        self.assertEqual(self.faults(), {"sensor"})
+        self.w.scales["reservoir"] = good
+        self.assertEqual(self.step()["heater"], 0)                # latched until ACK
+
     def test_status_reports_every_fault_key(self):
         self.assertEqual(set(self.step()["fault"]), set(self.main.FAULT_KEYS))
 
