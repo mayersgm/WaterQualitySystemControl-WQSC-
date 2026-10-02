@@ -14,6 +14,7 @@ from dashboard import Dashboard
 from calibration import CalibrationScreen
 from settings import SettingsScreen
 from alarm import Alarm
+import net
 
 LINK_TIMEOUT_MS = 3000
 LIMITS_REFRESH_MS = 60 * 1000   # bars/markers scale to the Pico's limits; keep them current
@@ -57,12 +58,16 @@ class App:
         if machine.reset_cause() == machine.WDT_RESET:
             print("booted after a WATCHDOG reset")
             note("watchdog reset (render stall or hang) detected at boot")
-        hw.init(exception_hook=self._on_lv_error)
         self.link = PicoLink()
         self.limits = None
         self._limits_asked = time.ticks_ms()
         self.last_rx = None
         self.link_ok = False
+        # Phone access (net.py) comes up before the display: WiFi needs IDF
+        # heap that the growing MicroPython heap would otherwise take.
+        self.remote = net.start(self)
+        self._remote_errors = 0
+        hw.init(exception_hook=self._on_lv_error)
 
         self.alarm = Alarm()
         self.dashboard = Dashboard(self.send, self.show_cal, self.show_levels, self.ack)
@@ -177,6 +182,16 @@ class App:
 
         self.alarm.update(status, self.link_ok)
 
+        if self.remote is not None:
+            try:
+                self.remote.poll(status, self.link_ok)
+            except MemoryError:
+                raise
+            except Exception as e:  # a network problem must never take the HMI down
+                self._remote_errors += 1
+                if self._remote_errors <= 20:   # don't fill flash with a repeating error
+                    log_crash("remote", e)
+
     def run(self):
         last_heap_log = last_gc = time.ticks_ms()
         wdt = None
@@ -201,6 +216,8 @@ class App:
                 # "after" is the real headroom; a steady decline means a leak
                 print("heap free before/after gc %d/%d uptime s %d" % (
                     before, gc.mem_free(), now // 1000))
+                if self.remote is not None:
+                    print(self.remote.diag())
             elif time.ticks_diff(now, last_gc) > GC_EVERY_MS:
                 last_gc = now
                 gc.collect()

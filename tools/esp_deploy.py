@@ -1,6 +1,7 @@
 """Deploy HMI files to the ESP32 while the touchscreen app is running.
 
-Usage:  python3 tools/esp_deploy.py [files...]     (default: all ESP-S32CI/*.py)
+Usage:  python3 tools/esp_deploy.py [files...]     (default: ESP-S32CI/*.py + *.html,
+                                                     minus *_example.py templates)
         python3 tools/esp_deploy.py --no-reset main.py
 
 The running HMI can't be interrupted reliably from mpremote (Ctrl-C often lands
@@ -75,7 +76,9 @@ def main():
 
     # Bare names always mean ESP-S32CI/<name>: the repo root has a legacy
     # main.py that must never be copied to the ESP32.
-    files = args.files or sorted(glob.glob(os.path.join(SRC, "*.py")))
+    files = args.files or sorted(
+        f for pat in ("*.py", "*.html") for f in glob.glob(os.path.join(SRC, pat))
+        if not f.endswith("_example.py"))
     files = [os.path.join(SRC, f) if os.sep not in f else f for f in files]
     for f in files:
         if not os.path.abspath(f).startswith(os.path.abspath(SRC) + os.sep):

@@ -23,18 +23,43 @@ display on SPI and a GT911 capacitive touch controller on I2C. Pins are in
 - `cmake` and `ninja`. Homebrew isn't installed on this Mac, so they came from
   PyPI: `python3 -m pip install cmake ninja`
 
-## Local change to the vendored config
-`~/esp/lvgl_micropython/lib/lv_conf.h`: `LV_FONT_MONTSERRAT_24` set to `1`
-(stock: 12/14/16 only). It's used for the large readouts on the calibration
-screen. Re-apply this after any fresh clone.
+## Local changes to the vendored tree
+Re-apply both after any fresh clone.
+- `~/esp/lvgl_micropython/lib/lv_conf.h`: `LV_FONT_MONTSERRAT_24` set to `1`
+  (stock: 12/14/16 only). It's used for the large readouts on the calibration
+  screen.
+- `lib/micropython/ports/esp32/boards/ESP32_GENERIC/mpconfigboard.h`: append
+  `#define MICROPY_PY_BLUETOOTH (0)`. It goes with `CONFIG_BT_ENABLED=n` on the
+  build line below.
+
+## Why Bluetooth is off (rebuilt 2026-10-01 for Milestone 2)
+With Bluetooth compiled in, WiFi and the HMI didn't fit in RAM together, and
+`wlan.active(True)` failed with "WiFi Out of Memory". The MicroPython heap
+starts at 56 KB. When LVGL fills it, it grows by taking the **largest free IDF
+heap block** (another ~56 KB), and the display driver already holds ~46 KB of
+IDF heap (two 15 KB DMA frame buffers plus SPI). Turning Bluetooth off raised
+the IDF heap at boot from 137 KB to 192 KB. Measured with WiFi, the push
+thread, a listening socket and every screen loaded: ~41 KB of IDF heap free,
+and an unchanged 112 KB MicroPython heap. Six static WiFi RX buffers instead
+of ten save another ~6 KB. Phone access needs no BLE, since WiFi was chosen
+because iOS Safari can't use Web Bluetooth.
+
+**Order matters:** `net.start()` runs before `hw.init()` in `main.py`, so WiFi
+and the push thread get their IDF memory before the MicroPython heap grows.
+
+The previous image, with Bluetooth, is kept at
+`~/esp/firmware_backup/lvgl_micropy_ESP32_GENERIC-4_with_bt_2026-09-28.bin`.
 
 ## Build
 ```
 git clone --depth 1 https://github.com/lvgl-micropython/lvgl_micropython.git ~/esp/lvgl_micropython
 cd ~/esp/lvgl_micropython
 # (apply the lv_conf.h font change above)
-python3 make.py esp32 BOARD=ESP32_GENERIC DISPLAY=st7789 INDEV=gt911 --flash-size=4
+python3 make.py esp32 BOARD=ESP32_GENERIC DISPLAY=st7789 INDEV=gt911 --flash-size=4 \
+  CONFIG_BT_ENABLED=n CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=6
 ```
+(`CONFIG_*` arguments are appended to the generated `sdkconfig.board`, the
+last defaults file applied.)
 - Use plain `ESP32_GENERIC`, **not** the `SPIRAM` variant that
   `display_configs/CYD-2432S032C.toml` assumes, because this board has no
   PSRAM.
@@ -42,9 +67,8 @@ python3 make.py esp32 BOARD=ESP32_GENERIC DISPLAY=st7789 INDEV=gt911 --flash-siz
   display and touch at runtime, so pin, rotation and color tweaks only need an
   `mpremote cp`, not a rebuild.
 
-Result: the app partition is auto-sized to 0x2c5000, so it's essentially
-full. That leaves about 1.2MB of filesystem for the UI files. WiFi and
-`network` are already included, so Milestone 2 needs no rebuild.
+Result without Bluetooth: a 0x291000 app partition (auto-sized, essentially
+full), leaving about 1.4MB of filesystem for the UI files.
 
 ## Flash
 This erases the whole ESP32, including any `.py` files, so redeploy the UI
@@ -73,7 +97,13 @@ esptool.py --chip esp32 -p /dev/cu.usbserial-20144212 -b 460800 \
 
 ## Deploy the UI
 ```
-mpremote connect /dev/cu.usbserial-20144212 cp ESP-S32CI/*.py :
-mpremote connect /dev/cu.usbserial-20144212 reset
+python3 tools/esp_deploy.py              # all *.py + web_ui.html, then reset
+python3 tools/esp_deploy.py net.py       # just one file
 ```
-Disconnect VS Code's MicroPico from the port first, since it holds it.
+Disconnect VS Code's MicroPico from the port first, since it holds it. If
+MicroPico connects to the ESP32 it interrupts `main.py` and the screen
+freezes; that happened on 2026-10-01.
+
+`wifi_secrets.py` (gitignored, copied from `wifi_secrets_example.py`) is
+deployed with everything else once it exists locally. Without it, the HMI runs
+with phone access off.

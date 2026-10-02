@@ -1,2 +1,5 @@
 __pycache__/
 *.pyc
+
+# Real WiFi password / PIN / push topic (template: wifi_secrets_example.py)
+ESP-S32CI/wifi_secrets.py

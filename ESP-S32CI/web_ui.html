@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="WQCS">
+<meta name="theme-color" content="#0b1015">
+<title>WQCS</title>
+<style>
+:root{--bg:#0b1015;--panel:#16202a;--line:#243240;--text:#e8eef3;--muted:#8a9aa8;
+--green:#2e9e4f;--blue:#2a6fd6;--amber:#e0a020;--red:#c62828;--grey:#56626d;--teal:#1a9a96;
+--purple:#7b4bc4;--water:#3a8ee6}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:16px -apple-system,system-ui,sans-serif;
+padding:env(safe-area-inset-top) 12px calc(16px + env(safe-area-inset-bottom));-webkit-user-select:none;user-select:none}
+#banner{margin:10px 0;border-radius:12px;padding:14px 16px;background:var(--grey);font-weight:600;font-size:19px}
+#banner.dark{color:#111}
+#sub{font-size:13px;color:var(--muted);margin:-4px 2px 10px;display:flex;justify-content:space-between}
+.card{background:var(--panel);border-radius:12px;padding:12px 14px;margin-bottom:10px}
+.vrow{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px}
+.vname{color:var(--muted);font-size:13px;letter-spacing:.06em}
+.vval{font-size:20px;font-weight:600}.vpct{color:var(--muted);font-size:14px;margin-left:6px}
+.bar{position:relative;height:16px;background:#0b1015;border-radius:8px;overflow:hidden}
+.fill{height:100%;width:0;background:var(--water);transition:width .6s}
+.fill.over{background:var(--amber)}
+.mark{position:absolute;top:0;bottom:0;width:2px;background:var(--amber)}
+.mark.room{background:var(--teal)}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.chip{font-size:12px;padding:3px 9px;border-radius:999px;background:var(--line);color:var(--muted)}
+.chip.on{background:var(--blue);color:#fff}.chip.hot{background:var(--amber);color:#111}
+.tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:10px}
+.tile{background:var(--panel);border-radius:12px;padding:10px}
+.tile b{display:block;font-size:20px;margin-top:2px}
+.tile span{font-size:11px;color:var(--muted);letter-spacing:.05em}
+.btns{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+button{font:600 17px -apple-system,system-ui,sans-serif;color:#fff;border:0;border-radius:12px;padding:16px 8px;background:var(--grey)}
+button:active{filter:brightness(1.25)}button:disabled{opacity:.4}
+#ack{grid-column:1/-1;background:#7f0000;display:none}
+#toast{position:fixed;left:12px;right:12px;bottom:calc(14px + env(safe-area-inset-bottom));padding:12px 14px;border-radius:10px;
+background:#263445;font-size:15px;opacity:0;transition:opacity .3s;pointer-events:none}
+#toast.show{opacity:1}
+#pinlink{color:var(--muted);font-size:13px;text-align:center;margin-top:14px}
+</style>
+</head>
+<body>
+<div id="banner">Connecting...</div>
+<div id="sub"><span id="age"></span><span id="wifi"></span></div>
+
+<div class="card" id="v-boiler"></div>
+<div class="card" id="v-collector"></div>
+<div class="card" id="v-reservoir"></div>
+
+<div class="tiles">
+  <div class="tile"><span>BOILER TEMP</span><b id="temp">--</b></div>
+  <div class="tile"><span>TDS-1 DISTILL</span><b id="tds1">--</b></div>
+  <div class="tile"><span>TDS-2 OUTLET</span><b id="tds2">--</b></div>
+</div>
+
+<div class="btns">
+  <button id="ack" onclick="cmd('ACK')">ACK fault</button>
+  <button id="b-start" onclick="startStop()">START</button>
+  <button id="b-ster" onclick="toggle('STERILIZE')" style="background:var(--purple)">STERILIZE</button>
+  <button id="b-empty" onclick="toggle('EMPTY')" style="background:var(--teal)">EMPTY</button>
+  <button onclick="cmd('RESET')">RESET</button>
+</div>
+<div id="pinlink"><a href="#" onclick="forgetPin();return false" style="color:inherit">Change PIN</a></div>
+<div id="toast"></div>
+
+<script>
+// Mirrors ESP-S32CI/dashboard.py so the phone and the touchscreen read the same.
+const TDS_FAULT = 50, TDS_WARN = 40;
+const FAULTS = {tds1:"TDS-1", overflow:"BOILER OVFL", refill_timeout:"REFILL T/O",
+  valve_stuck:"VALVE STUCK", collector_overflow:"COLL OVFL", reservoir_overflow:"RES OVFL",
+  transfer_leak:"XFER LEAK", controller:"CTRL STALL"};
+const STATES = {RUN:["green","RUN - distilling"], IDLE:["blue","IDLE - filling boiler"],
+  STANDBY:["amber","STANDBY - no room"], STOPPED:["grey","STOPPED"],
+  EMPTY:["teal","EMPTY - drain mode"], FAULT:["red","FAULT"]};
+const CAPACITY = {boiler:3785, collector:7570, reservoir:34065}; // until the Pico's limits arrive
+const MARKS = {boiler:["boiler_topoff","boiler_full"], collector:["collector_empty","collector_full"],
+  reservoir:["reservoir_full"]};
+const $ = id => document.getElementById(id);
+let last = null, current = null, busy = false;
+
+for (const v of ["boiler","collector","reservoir"]) {
+  $("v-"+v).innerHTML = `<div class="vrow"><span class="vname">${v.toUpperCase()}</span>
+    <span><span class="vval" id="${v}-g">--</span><span class="vpct" id="${v}-p"></span></span></div>
+    <div class="bar" id="${v}-bar"><div class="fill" id="${v}-fill"></div></div>
+    <div class="chips" id="${v}-chips"></div>`;
+}
+
+function color(name){ return `var(--${name})`; }
+function grams(g){ return g == null ? "--" : (Math.abs(g) >= 1000 ? (g/1000).toFixed(2)+" kg" : Math.round(g/10)*10+" g"); }
+function chip(text, on, cls){ return `<span class="chip ${on ? (cls||"on") : ""}">${text}</span>`; }
+
+function setBanner(name, text){
+  const b = $("banner");
+  b.style.background = color(name);
+  b.className = name === "amber" ? "dark" : "";
+  b.textContent = text;
+}
+
+function vessel(name, g, limits){
+  const full = (limits && limits[name+"_full"]) || CAPACITY[name];
+  const pct = g == null ? 0 : Math.round(100*g/full);
+  $(name+"-g").textContent = grams(g);
+  $(name+"-p").textContent = g == null ? "" : pct+"%";
+  const fill = $(name+"-fill");
+  fill.style.width = Math.max(0, Math.min(100, pct))+"%";
+  fill.className = "fill" + (limits && g >= full ? " over" : "");
+  const bar = $(name+"-bar");
+  bar.querySelectorAll(".mark").forEach(m => m.remove());
+  const marks = limits ? MARKS[name].filter(k => k in limits).map(k => [limits[k], ""]) : [];
+  if (name === "reservoir" && limits && last && last.status.collector_g != null)
+    marks.push([limits.reservoir_full - Math.max(0, last.status.collector_g), " room"]);
+  for (const [mg, cls] of marks) {
+    const p = Math.max(0, Math.min(100, 100*mg/full));
+    if (p >= 100) continue;   // the FULL marker is the right edge of the bar
+    const m = document.createElement("div");
+    m.className = "mark"+cls; m.style.left = `calc(${p}% - 1px)`; bar.appendChild(m);
+  }
+}
+
+function tds(id, ppm, faulted){
+  const el = $(id);
+  el.textContent = (ppm || 0)+" ppm";
+  el.style.color = faulted || ppm >= TDS_FAULT ? color("red") : ppm >= TDS_WARN ? color("amber") : color("green");
+}
+
+function render(d){
+  last = d;
+  const s = d.status || {};
+  current = s.cmd;
+  const faults = Object.keys(s.fault || {}).filter(k => s.fault[k]);
+  const valves = s.valves || {};
+  if (!d.link) {
+    setBanner("purple", "NO LINK TO PICO" + (d.errors ? ` (err ${d.errors})` : ""));
+  } else if (faults.length) {
+    setBanner("red", "FAULT " + faults.map(k => FAULTS[k] || k).join(" + "));
+  } else {
+    let [c, t] = STATES[s.state] || ["grey", s.state || "WAITING FOR PICO..."];
+    if (s.state === "RUN" && s.cmd === "STERILIZE") t = "RUN - sterilizing";
+    if (s.state === "STANDBY") t = valves.transfer ? "STANDBY - transferring" : "STANDBY - no room";
+    setBanner(c, t);
+  }
+  $("ack").style.display = faults.length ? "block" : "none";
+  $("age").textContent = d.age_ms == null ? "no data yet" : `updated ${Math.round(d.age_ms/1000)} s ago`;
+  $("wifi").textContent = d.rssi == null ? "" : `WiFi ${d.rssi} dBm`;
+
+  for (const v of ["boiler","collector","reservoir"]) vessel(v, s[v+"_g"], d.limits);
+  $("boiler-chips").innerHTML = chip("MAIN valve", valves.main) + chip("REFILL", valves.refill)
+    + chip("HEATER", s.heater, "hot") + chip("PRESSURE SW", s.pressure_sw);
+  $("collector-chips").innerHTML = chip("TRANSFER", valves.transfer);
+  $("reservoir-chips").innerHTML = "";
+
+  $("temp").textContent = s.temp_f == null ? "-- F" : Math.round(s.temp_f)+" F";
+  $("temp").style.color = s.heater ? color("amber") : "";
+  tds("tds1", s.tds1_ppm, (s.fault||{}).tds1);
+  tds("tds2", s.tds2_ppm, (s.alert||{}).tds2);
+
+  const st = $("b-start");
+  st.textContent = s.cmd === "START" ? "STOP" : "START";
+  st.style.background = color(s.cmd === "START" ? "red" : "green");
+  $("b-ster").textContent = s.cmd === "STERILIZE" ? "CANCEL" : "STERILIZE";
+  $("b-empty").textContent = s.cmd === "EMPTY" ? "CANCEL" : "EMPTY";
+  document.querySelectorAll(".btns button").forEach(b => b.disabled = busy || !d.link);
+}
+
+async function poll(){
+  try {
+    const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 3000);
+    const r = await fetch("/status", {cache:"no-store", signal:ctl.signal});
+    clearTimeout(t);
+    render(await r.json());
+  } catch (e) {
+    setBanner("grey", "OFFLINE - can't reach the touchscreen");
+    $("age").textContent = "check you're on home WiFi";
+    document.querySelectorAll(".btns button").forEach(b => b.disabled = true);
+  }
+  setTimeout(poll, 2000);
+}
+
+function toast(msg){
+  const t = $("toast"); t.textContent = msg; t.className = "show";
+  clearTimeout(toast.t); toast.t = setTimeout(() => t.className = "", 3000);
+}
+function getPin(){ try { return localStorage.getItem("wqcs_pin"); } catch (e) { return null; } }
+function savePin(p){ try { localStorage.setItem("wqcs_pin", p); } catch (e) {} }
+function forgetPin(){ try { localStorage.removeItem("wqcs_pin"); } catch (e) {} toast("PIN cleared"); }
+
+function startStop(){ current === "START" ? cmd("STOP") : cmd("START", "Start distilling?"); }
+function toggle(c){
+  if (current === c) return cmd("STOP");
+  cmd(c, c === "STERILIZE" ? "Start a sterilize cycle?" : null);
+}
+
+async function cmd(c, question){
+  if (question && !confirm(question)) return;
+  let pin = getPin() || prompt("Command PIN");
+  if (!pin) return;
+  busy = true; if (last) render(last);
+  try {
+    const r = await fetch("/cmd", {method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({cmd:c, pin})});
+    const j = await r.json();
+    if (r.ok) { savePin(pin); toast(c+" sent"); }
+    else { if (r.status === 403) forgetPin(); toast(j.err || ("error "+r.status)); }
+  } catch (e) { toast("Couldn't reach the touchscreen"); }
+  busy = false; if (last) render(last);
+}
+
+poll();
+</script>
+</body>
+</html>
