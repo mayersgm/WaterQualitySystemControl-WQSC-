@@ -145,6 +145,62 @@ class ControlTest(unittest.TestCase):
         self.assertIn("tds1", self.faults())
         self.assertEqual(s["valves"]["transfer"], 0)
 
+    # -- a dead or stuck control loop must fail safe (2026-10-01 incident) --
+    def heat(self):
+        """Running with the heater on, as in the incident."""
+        self.set(boiler=600, collector=0, reservoir=0)
+        s = self.step()
+        self.assertEqual(s["heater"], 1)
+        return s
+
+    def outputs(self):
+        m = self.main
+        return [p.value() for p in (m.MAIN_VALVE, m.REFILL_VALVE, m.TRANSFER_VALVE, m.BOILER_RELAY)]
+
+    def test_exception_in_control_step_fails_safe(self):
+        self.heat()
+        def boom():
+            raise MemoryError("simulated")
+        self.w._control_step = boom
+        self.w.loop_once()                      # must not raise
+        self.assertEqual(self.outputs(), [0, 0, 0, 0])
+        self.assertTrue(self.w.faults["controller"])
+        self.assertEqual(self.w.last_status["heater"], 0)
+        self.assertEqual(self.w.last_status["state"], "FAULT")
+        self.assertTrue(self.w.last_status["fault"]["controller"])
+
+    def test_exception_in_command_handling_fails_safe(self):
+        self.heat()
+        self.w._handle_command = lambda line: 1 / 0
+        self.w.queue_command("START")
+        self.w.loop_once()
+        self.assertEqual(self.outputs(), [0, 0, 0, 0])
+        self.assertTrue(self.w.faults["controller"])
+
+    def test_stalled_loop_forces_outputs_off_and_silences_status(self):
+        self.heat()
+        clock = self.main.time
+        self.w.loop_once()
+        self.assertTrue(self.w.supervise(clock.ticks_ms()))
+        clock.now += self.main.STALL_MS + 1      # core 0 stuck in a sensor read
+        self.assertFalse(self.w.supervise(clock.ticks_ms()))
+        self.assertEqual(self.outputs(), [0, 0, 0, 0])
+
+    def test_recovered_loop_latches_fault_until_ack(self):
+        self.heat()
+        clock = self.main.time
+        clock.now += self.main.STALL_MS + 1
+        self.w.supervise(clock.ticks_ms())
+        self.w.loop_once()                       # core 0 comes back
+        self.assertTrue(self.w.supervise(clock.ticks_ms()))
+        self.assertIn("controller", self.faults())
+        self.assertEqual(self.w.last_status["heater"], 0)   # any fault stops distillation
+        self.w.queue_command("ACK")
+        self.w.loop_once()
+        self.w.loop_once()
+        self.assertNotIn("controller", self.faults())
+        self.assertEqual(self.w.last_status["heater"], 1)
+
     def test_status_reports_every_fault_key(self):
         self.assertEqual(set(self.step()["fault"]), set(self.main.FAULT_KEYS))
 

@@ -125,7 +125,8 @@ unchanged values. `PicoLink` routes these lines to `last_limits`, not
  "pressure_sw":true,
  "heater":1,
  "fault":{"tds1":false,"overflow":false,"refill_timeout":false,"valve_stuck":false,
-          "collector_overflow":false,"reservoir_overflow":false,"transfer_leak":false},
+          "collector_overflow":false,"reservoir_overflow":false,"transfer_leak":false,
+          "controller":false},
  "alert":{"tds2":false}}
 ```
 Fill percentages aren't sent. The HMI computes them from `*_g` and the vessel
@@ -142,6 +143,13 @@ doing right now, one of:
 - `EMPTY` — `EMPTY` (parked for manual draining)
 - `FAULT` — any of the four recoverable faults below is latched
 - `IDLE` — commanded `START` but not yet heating (e.g. boiler still filling)
+
+`controller` latches when the control loop itself fails: an exception
+in a pass, or a pass that doesn't finish within 5 s (`STALL_MS`, e.g. a sensor
+read that never returns). On a stall, core 1 forces every output off and stops
+sending status, so the ESP32 shows NO LINK and pushes an alert rather than
+displaying frozen values. Added 2026-10-01 after core 0 stopped with the heater
+on while core 1 kept re-sending its last status.
 
 `fault` entries are recoverable-halt conditions (need `ACK`); `alert` entries
 (TDS-2) are informational only and never gate an actuator. The boiler drain

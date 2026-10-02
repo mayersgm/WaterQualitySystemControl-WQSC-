@@ -57,8 +57,15 @@ PRESSURE_SW_ACTIVE_HIGH = False  # bench sim relay polarity (GP10/PRESSURE_SIM_R
 PRESSURE_SIM_RELAY = Pin(10, Pin.OUT, value=0)
 LED = Pin(25, Pin.OUT)             # core-0 heartbeat
 
-for _pin in (MAIN_VALVE, REFILL_VALVE, TRANSFER_VALVE, BOILER_RELAY):
-    _pin.value(0)
+
+
+def all_outputs_off():
+    """Fail-safe: heater off, every valve closed. Safe to call from either core."""
+    for pin in (MAIN_VALVE, REFILL_VALVE, TRANSFER_VALVE, BOILER_RELAY, PRESSURE_SIM_RELAY):
+        pin.value(0)
+
+
+all_outputs_off()
 
 # ---------------------------------------------------------------------------
 # Weight thresholds, grams post-tare — see Phase0_Design.md sec 3
@@ -95,12 +102,18 @@ DEFAULT_LIMITS = {
 }
 
 FAULT_KEYS = ("tds1", "overflow", "refill_timeout", "valve_stuck",
-              "collector_overflow", "reservoir_overflow", "transfer_leak")
+              "collector_overflow", "reservoir_overflow", "transfer_leak",
+              "controller")   # control loop raised or stalled (see loop_once/supervise)
 
 TDS_FAULT_PPM = 50             # carried over from old system's contamination threshold
 
 DEBOUNCE_CONFIRMS = 3           # consecutive control-loop passes to confirm a threshold crossing
 LOOP_PERIOD_S = 1.0
+# Core 1 forces every output off and stops sending status if core 0's control
+# loop hasn't completed a pass for this long (a blocked sensor read, or core 0
+# dead after an uncaught exception). Before 2026-10-01, core 1 kept re-sending
+# the last status with the heater on while nothing was enforcing the interlocks.
+STALL_MS = 5000
 
 # Operator commands. RUN/STANDBY are not commands -- they're reported below
 # as derived *state* (what the system is actually doing), since sending RUN
@@ -188,6 +201,8 @@ class Wqcs:
         self._db_valve_stuck_closed = Debounce()  # commanded open, pressure still says blocked
 
         self.last_status = {}
+        self._beat = time.ticks_ms()   # core 0 heartbeat, written once per pass
+        self._stalled = False          # set by core 1 when the heartbeat goes stale
 
     # -- command queue: core 1 (UART) is the producer, core 0 the consumer --
     def queue_command(self, line):
@@ -307,9 +322,44 @@ class Wqcs:
     def run(self):
         _thread.start_new_thread(self._uart_thread, ())
         while True:
+            self.loop_once()
+            time.sleep(LOOP_PERIOD_S)
+
+    def loop_once(self):
+        """One control pass. Never raises: an error leaves every output off
+        and latches the 'controller' fault (ACK to clear) instead of killing
+        core 0 while core 1 keeps reporting stale status."""
+        if self._stalled:
+            # core 1 already forced the outputs off while this loop was stuck
+            self._stalled = False
+            self.faults["controller"] = True
+            print("control loop was stalled; outputs had been forced off")
+        try:
             self._drain_commands()
             self._control_step()
-            time.sleep(LOOP_PERIOD_S)
+        except Exception as e:
+            print("control loop error:", repr(e))
+            all_outputs_off()
+            self.heater_on = self.refill_open = self.transfer_active = False
+            self.refill_started_at = None
+            self.faults["controller"] = True
+            self.last_status = dict(self.last_status, state=STATE_FAULT, heater=0,
+                                    valves={"main": 0, "refill": 0, "transfer": 0},
+                                    fault=dict(self.faults))
+        self._beat = time.ticks_ms()
+
+    def supervise(self, now):
+        """Core 1, every pass: True while core 0's control loop is alive. If it
+        has stalled, keep every output off; the caller stops sending status so
+        the ESP32 shows NO LINK (and pushes a phone alert) rather than frozen
+        values."""
+        if time.ticks_diff(now, self._beat) <= STALL_MS:
+            return True
+        all_outputs_off()
+        if not self._stalled:
+            self._stalled = True
+            print("control loop stalled > %d ms; outputs forced off" % STALL_MS)
+        return False
 
     def _control_step(self):
         try:
@@ -498,8 +548,9 @@ class Wqcs:
                 self._write_all(uart, line)
 
             now = time.ticks_ms()
+            alive = self.supervise(now)
             if time.ticks_diff(now, last_status_send) >= 1000:
-                if self.last_status:
+                if self.last_status and alive:
                     self._write_all(uart, json.dumps(self.last_status).encode() + b"\n")
                 last_status_send = now
 
