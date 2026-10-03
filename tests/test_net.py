@@ -375,3 +375,107 @@ class PusherTest(unittest.TestCase):
         FakeTime.now += notify.DNS_RETRY_MS
         self.run_for(200)
         self.assertEqual((self.lookups, self.p.sent), (2, 1))
+
+
+class ScriptedWLAN:
+    """WLAN whose connection state the test controls."""
+    PM_NONE = 0
+
+    def __init__(self, _iface=None):
+        self.up = False
+        self.calls = []
+
+    def active(self, on=None):
+        if on is not None:
+            self.calls.append("active %s" % on)
+        return True
+
+    def config(self, **kw):
+        pass
+
+    def connect(self, ssid, pw):
+        self.calls.append("connect")
+
+    def disconnect(self):
+        pass
+
+    def isconnected(self):
+        return self.up
+
+    def ifconfig(self):
+        return ("192.168.50.140" if self.up else "0.0.0.0", "", "", "")
+
+    def status(self, key=None):
+        return -50 if key else (1010 if self.up else 1001)
+
+
+class WiFiRecoveryTest(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        FakeTime.now = 0
+        self.dir = tempfile.TemporaryDirectory()
+        self.wlan = ScriptedWLAN()
+        self._network = net.network
+        net.network = types.SimpleNamespace(WLAN=lambda i: self.wlan, STA_IF=0,
+                                            hostname=lambda n: None)
+        self.resets = []
+        self._machine = sys.modules.get("machine")
+        sys.modules["machine"] = types.SimpleNamespace(reset=lambda: self.resets.append(FakeTime.now))
+        self.w = net.WiFi("ssid", "pw", log_path=os.path.join(self.dir.name, "wifi.log"))
+
+    def tearDown(self):
+        net.network = self._network
+        if self._machine is not None:
+            sys.modules["machine"] = self._machine
+        self.dir.cleanup()
+
+    def run_for(self, ms, step=1000):
+        for _ in range(ms // step):
+            FakeTime.now += step
+            self.w.poll()
+
+    def test_connect_logs_and_reports_up(self):
+        self.wlan.up = True
+        self.assertTrue(self.w.poll())
+        self.assertEqual(self.w.ip, "192.168.50.140")
+        self.assertIn("connected ip=192.168.50.140", open(self.w.log_path).read())
+
+    def test_lost_link_escalates_reconnect_reinit_reset(self):
+        self.wlan.up = True
+        self.w.poll()
+        self.wlan.up = False
+        self.wlan.calls = []
+        self.run_for(net.REINIT_MS + 2000)
+        self.assertGreaterEqual(self.wlan.calls.count("connect"), 3)        # plain retries
+        self.assertEqual(self.wlan.calls.count("active False"), 1)          # one driver restart
+        self.assertEqual(self.resets, [])
+        self.run_for(net.RESET_MS - net.REINIT_MS)
+        self.assertEqual(len(self.resets), 1)
+        log = open(self.w.log_path).read()
+        self.assertIn("lost", log)
+        self.assertIn("restarting the WiFi driver", log)
+        self.assertIn("restarting the ESP32", log)
+        self.assertEqual(self.w.drops, 1)
+
+    def test_never_connected_since_boot_never_resets(self):
+        # router off for hours: keep retrying, but no reboot loop
+        self.run_for(net.RESET_MS * 3, step=5000)
+        self.assertEqual(self.resets, [])
+
+    def test_recovery_before_reset_rearms_the_ladder(self):
+        self.wlan.up = True
+        self.w.poll()
+        self.wlan.up = False
+        self.run_for(net.REINIT_MS + 1000)
+        self.wlan.up = True
+        self.w.poll()
+        self.wlan.up = False
+        self.wlan.calls = []
+        self.run_for(net.REINIT_MS + 2000)
+        self.assertEqual(self.wlan.calls.count("active False"), 1)          # re-armed
+        self.assertEqual(self.resets, [])
+
+    def test_associated_without_address_counts_as_down(self):
+        self.wlan.up = True
+        self.wlan.ifconfig = lambda: ("0.0.0.0", "", "", "")
+        self.assertFalse(self.w.poll())

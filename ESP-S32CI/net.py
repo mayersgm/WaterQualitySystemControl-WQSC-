@@ -5,7 +5,8 @@ never blocks rendering or the Pico link: every socket is non-blocking, and
 each poll() does a bounded amount of work.
 
   GET  /        the mobile page (web_ui.html, streamed from flash)
-  GET  /status  {"link", "age_ms", "status", "limits", "errors", "rssi"}
+  GET  /status  {"link", "age_ms", "status", "limits", "errors", "rssi", ...}
+  GET  /log     wifi.log: WiFi connects, drops and recovery steps
   POST /cmd     {"cmd": "START", "pin": "1234"} -> relayed to the Pico
 
 Remote commands are allow-listed (no TARE/CAL/SET from the phone) and need the
@@ -26,6 +27,10 @@ PAGE = "web_ui.html"
 HOSTNAME = "wqcs"                 # http://wqcs.local/ via the built-in mDNS responder
 
 RECONNECT_MS = 30000              # retry joining WiFi this often while disconnected
+REINIT_MS = 2 * 60 * 1000         # then restart the WiFi driver once
+RESET_MS = 10 * 60 * 1000         # then restart the ESP32 (only if WiFi was up this boot)
+WIFI_LOG = "wifi.log"
+LOG_MAX = 4096
 MAX_CONNS = 3
 CONN_TIMEOUT_MS = 5000
 MAX_REQUEST = 2048                # Safari's headers are ~600 bytes; anything bigger is junk
@@ -43,15 +48,60 @@ def _would_block(e):
 
 
 class WiFi:
-    """Joins the home network and keeps retrying; never blocks after start."""
+    """Joins the home network and keeps it joined; never blocks after start.
 
-    def __init__(self, ssid, password):
+    Recovery escalates while the link is down (2026-10-03: after an overnight
+    router restart the HMI stayed off WiFi with plain connect() retries):
+      every RECONNECT_MS  connect() again
+      after REINIT_MS     restart the WiFi driver (active False/True)
+      after RESET_MS      restart the ESP32 -- only if WiFi had been up this
+                          boot, so a router that's off for hours can't cause
+                          a reboot loop (the Pico is unaffected either way)
+    Every step goes to wifi.log (kept under LOG_MAX bytes) for diagnosis.
+    """
+
+    def __init__(self, ssid, password, log_path=WIFI_LOG):
         self.ssid, self.password = ssid, password
+        self.log_path = log_path
         try:
             network.hostname(HOSTNAME)
         except Exception:  # older firmware: name falls back to the default
             pass
         self.wlan = network.WLAN(network.STA_IF)
+        self.ip = None
+        self.was_up = False          # connected at least once since boot
+        self.down_since = time.ticks_ms()
+        self._reinit_done = False
+        self.drops = 0
+        self.log("boot")
+        self._activate()
+        self._connect()
+
+    def log(self, event):
+        line = "%d %s status=%s\n" % (time.ticks_ms() // 1000, event, self._status())
+        print("wifi:", line.strip())
+        try:
+            try:
+                if os.stat(self.log_path)[6] > LOG_MAX:
+                    try:
+                        os.remove(self.log_path + ".1")   # rename won't overwrite on every FS
+                    except OSError:
+                        pass
+                    os.rename(self.log_path, self.log_path + ".1")   # keep one old file
+            except OSError:
+                pass
+            with open(self.log_path, "a") as f:
+                f.write(line)
+        except OSError:
+            pass
+
+    def _status(self):
+        try:
+            return self.wlan.status()
+        except Exception:
+            return None
+
+    def _activate(self):
         self.wlan.active(True)
         try:
             # Power saving made the HMI unreachable after idling: the radio
@@ -60,9 +110,6 @@ class WiFi:
             self.wlan.config(pm=self.wlan.PM_NONE)
         except (AttributeError, ValueError, OSError) as e:
             print("wifi: can't disable power saving", e)
-        self.ip = None
-        self._last_try = None
-        self._connect()
 
     def _connect(self):
         self._last_try = time.ticks_ms()
@@ -73,19 +120,46 @@ class WiFi:
         try:
             self.wlan.connect(self.ssid, self.password)
         except OSError as e:
-            print("wifi connect error", e)
+            self.log("connect error %r" % (e,))
+
+    def _connected(self):
+        # associated AND holding an address (an expired lease can leave 0.0.0.0)
+        if not self.wlan.isconnected():
+            return False
+        ip = self.wlan.ifconfig()[0]
+        return ip not in ("0.0.0.0", "")
 
     def poll(self):
-        """Returns True while connected. Logs the IP once per connection."""
-        if self.wlan.isconnected():
+        """Returns True while connected."""
+        now = time.ticks_ms()
+        if self._connected():
             if self.ip is None:
                 self.ip = self.wlan.ifconfig()[0]
-                print("wifi connected: http://%s/  (http://%s.local/)" % (self.ip, HOSTNAME))
+                self.was_up = True
+                self._reinit_done = False
+                self.log("connected ip=%s rssi=%s down_s=%d" % (
+                    self.ip, self.rssi(), time.ticks_diff(now, self.down_since) // 1000))
             return True
         if self.ip is not None:
-            print("wifi lost")
             self.ip = None
-        if time.ticks_diff(time.ticks_ms(), self._last_try) > RECONNECT_MS:
+            self.drops += 1
+            self.down_since = now
+            self.log("lost")
+        down = time.ticks_diff(now, self.down_since)
+        if self.was_up and down > RESET_MS:
+            self.log("down %d s: restarting the ESP32" % (down // 1000))
+            import machine
+            machine.reset()
+        if not self._reinit_done and down > REINIT_MS:
+            self._reinit_done = True
+            self.log("down %d s: restarting the WiFi driver" % (down // 1000))
+            try:
+                self.wlan.active(False)
+            except OSError:
+                pass
+            self._activate()
+            self._connect()
+        elif time.ticks_diff(now, self._last_try) > RECONNECT_MS:
             self._connect()
         return False
 
@@ -168,6 +242,15 @@ class Remote:
             return 200, "text/html; charset=utf-8", PAGE
         if path == "/status":
             return self._json(200, self.snapshot(now))
+        if path == "/log":                # WiFi history (no secrets in it)
+            text = b""
+            for name in (self.wifi.log_path + ".1", self.wifi.log_path):
+                try:
+                    with open(name, "rb") as f:
+                        text += f.read()
+                except OSError:
+                    pass
+            return 200, "text/plain", text or b"(empty)\n"
         if path == "/cmd":
             if method != "POST":
                 return self._json(405, {"err": "POST only"})
@@ -181,6 +264,7 @@ class Remote:
                 "limits": app.limits, "errors": app.link.link_errors,
                 "rssi": self.wifi.rssi() if self.wifi else None,
                 "uptime_s": now // 1000,
+                "wifi_drops": self.wifi.drops,
                 "push": None if self.pusher is None else {
                     "sent": self.pusher.sent, "failed": self.pusher.failed,
                     "queued": len(self.pusher.queue)}}
@@ -231,8 +315,8 @@ class Remote:
         except Exception:
             idf = "?"
         p = self.pusher
-        return "net: idf free/largest %s wifi %s rssi %s conns %d push sent/failed/queued %s" % (
-            idf, self.wifi.ip, self.wifi.rssi(), len(self.conns),
+        return "net: idf free/largest %s wifi %s rssi %s drops %d conns %d push sent/failed/queued %s" % (
+            idf, self.wifi.ip, self.wifi.rssi(), self.wifi.drops, len(self.conns),
             "%d/%d/%d" % (p.sent, p.failed, len(p.queue)) if p else "off")
 
     # -- main-loop hook --
@@ -245,6 +329,16 @@ class Remote:
         was_up = self.wifi.ip is not None
         if not self.wifi.poll():
             return
+        if not was_up and self.listener is not None:
+            # a restarted WiFi driver invalidates sockets; start clean
+            for c in self.conns:
+                c.close()
+            self.conns = []
+            try:
+                self.listener.close()
+            except OSError:
+                pass
+            self.listener = None
         if self.pusher is not None:
             if not was_up:
                 self.pusher.resolve(now)   # the one blocking step, done at connect time
