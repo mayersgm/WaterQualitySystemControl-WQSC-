@@ -30,7 +30,7 @@ class Confirm:
         self.msg.set_pos(10, 12)
         self.on_yes = None
         w.button(card, "Cancel", self.hide, 10, 74, 110, 36, w.GREY)
-        w.button(card, "Yes", self._yes, 140, 74, 110, 36, w.GREEN)
+        w.button(card, "Yes", self._yes, 140, 74, 110, 36, w.GREEN, tone=w.TONE_CMD)
         self.hide()
 
     def ask(self, text, on_yes):
@@ -68,8 +68,10 @@ class CalibrationScreen:
         self.reading = w.label(self.scr, "--", w.FONT_L)
         self.reading.align(lv.ALIGN.TOP_MID, 0, 74)
 
-        self.btn_tare = w.button(self.scr, "1. TARE", self._tare, 4, 110, 150, 36, w.BLUE)
-        self.btn_cal = w.button(self.scr, "2. CAL", self._cal, 166, 110, 150, 36, w.GREEN)
+        self.btn_tare = w.button(self.scr, "1. TARE", self._tare, 4, 110, 150, 36, w.BLUE,
+                                 tone=w.TONE_CMD)
+        self.btn_cal = w.button(self.scr, "2. CAL", self._cal, 166, 110, 150, 36, w.GREEN,
+                                tone=w.TONE_CMD)
 
         # reference-weight row: scales only
         self.ref_row = [w.label(self.scr, "Reference:", color=w.MUTED)]
@@ -77,7 +79,7 @@ class CalibrationScreen:
         for text, delta, x in (("-100", -100, 76), ("-10", -10, 124),
                                ("+10", 10, 226), ("+100", 100, 272)):
             self.ref_row.append(w.button(self.scr, text, lambda d=delta: self._adj(d),
-                                         x, 154, 44, 30, w.PANEL, w.FONT_S))
+                                         x, 154, 44, 30, w.PANEL, w.FONT_S, tone=w.TONE_ADJ))
         self.ref_lbl = w.label(self.scr, "", w.FONT_M)
         self.ref_lbl.set_pos(174, 160)
         self.ref_row.append(self.ref_lbl)
@@ -94,21 +96,18 @@ class CalibrationScreen:
         self.scale = name
         probe = name in PROBES
         for n, b in self.sel.items():
-            b.set_style_bg_color(w.BLUE if n == name else w.PANEL, 0)
+            w.set_bg(b, w.BLUE if n == name else w.PANEL)
         w.set_text(self.reading, "--")
         w.set_button_text(self.btn_tare, "ZERO probe" if probe else "1. TARE")
         for o in [self.btn_cal] + self.ref_row:
-            if probe:
-                o.add_flag(lv.obj.FLAG.HIDDEN)
-            else:
-                o.remove_flag(lv.obj.FLAG.HIDDEN)
+            w.set_hidden(o, probe)
         w.set_text(self.hint, 
             "Put the probe in distilled water, then ZERO." if probe else
             "Tare with the platform empty, then CAL with the reference on it.")
 
     def _adj(self, delta):
         self.ref_g = max(100, min(20000, self.ref_g + delta))
-        self.ref_lbl.set_text("%d g" % self.ref_g)
+        w.set_text(self.ref_lbl, "%d g" % self.ref_g)
 
     def _tare(self):
         name = self.scale.upper()

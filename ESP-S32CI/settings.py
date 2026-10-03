@@ -43,7 +43,7 @@ class SettingsScreen:
             self.val_lbls[key] = lbl
             for sym, sign, x in ((lv.SYMBOL.MINUS, -1, 234), (lv.SYMBOL.PLUS, 1, 278)):
                 b = w.button(self.scr, sym, lambda k=key, d=sign * step: self._adj(k, d),
-                             x, y, 40, 25, w.PANEL, w.FONT_S)
+                             x, y, 40, 25, w.PANEL, w.FONT_S, tone=w.TONE_ADJ)
                 b.add_event_cb(lambda e, k=key, d=sign * step: self._adj(k, d),
                                lv.EVENT.LONG_PRESSED_REPEAT, None)
 
@@ -52,11 +52,12 @@ class SettingsScreen:
         self.status = w.label(self.scr, "", color=w.MUTED)
         self.status.set_width(308)
         self.status.set_pos(6, 170)
-        w.button(self.scr, "Defaults", self._defaults, 2, 201, 110, 37, w.GREY, w.FONT_S)
+        w.button(self.scr, "Defaults", self._defaults, 2, 201, 110, 37, w.GREY, w.FONT_S,
+                 tone=w.TONE_CMD)
         self.btn_save = w.button(self.scr, lv.SYMBOL.SAVE + " Save", self._save,
-                                 208, 201, 110, 37, w.GREEN)
+                                 208, 201, 110, 37, w.GREEN, tone=w.TONE_CMD)
         w.set_enabled(self.btn_save, False)
-        self.status.set_text("Waiting for Pico limits...")
+        w.set_text(self.status, "Waiting for Pico limits...")
 
     def load(self, limits):
         """Called when the screen is opened: start editing from the Pico's values."""
@@ -99,27 +100,29 @@ class SettingsScreen:
         return None
 
     def _refresh(self, note):
+        # change-only updates: +/- auto-repeats ~10x/s, and redrawing every
+        # label each time fragmented the heap until the HMI reset (2026-10-03)
         for key, _, vessel, _ in ROWS:
             g = self.values[key]
             changed = self.saved is not None and g != self.saved.get(key)
-            self.val_lbls[key].set_text("%s %d%%" % (w.fmt_g(g), w.pct(vessel, g)))
-            self.val_lbls[key].set_style_text_color(w.AMBER if changed else w.TEXT, 0)
+            w.set_text(self.val_lbls[key], "%s %d%%" % (w.fmt_g(g), w.pct(vessel, g)))
+            w.set_text_color(self.val_lbls[key], w.AMBER if changed else w.TEXT)
         problem = self._problem()
         dirty = self.values != self.saved
         w.set_enabled(self.btn_save, dirty and problem is None)
-        self.status.set_text(problem or note or ("Unsaved changes" if dirty else ""))
-        self.status.set_style_text_color(w.RED if problem else w.MUTED, 0)
+        w.set_text(self.status, problem or note or ("Unsaved changes" if dirty else ""))
+        w.set_text_color(self.status, w.RED if problem else w.MUTED)
 
     def _save(self):
         body = ",".join("%s=%d" % (r[0].upper(), self.values[r[0]]) for r in ROWS)
         self.pending = True
         self.on_command("SET:" + body)
-        self.status.set_text("Saving...")
+        w.set_text(self.status, "Saving...")
 
     def _defaults(self):
         self.pending = True
         self.on_command("RESET_LIMITS")
-        self.status.set_text("Restoring defaults...")
+        w.set_text(self.status, "Restoring defaults...")
 
     def update(self, s):
         pass

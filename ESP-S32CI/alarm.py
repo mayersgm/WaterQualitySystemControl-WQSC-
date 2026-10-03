@@ -25,7 +25,6 @@ ACK_GRACE_MS = 30000
 FAULT = ((2400, 160), (0, 90), (2400, 160), (0, 700))
 CHIME = ((1600, 120), (0, 60), (2000, 160))
 LINK_LOST = ((700, 200), (0, 150), (700, 200), (0, 900)) * 2
-CLICK = ((2600, 18),)
 
 
 class Alarm:
@@ -73,11 +72,11 @@ class Alarm:
         self._pattern = None
         self._pwm.duty_u16(0)
 
-    def click(self):
-        """Key-press feedback. Skipped while any alert pattern is playing, so
-        a tap never cuts off or masks an alarm."""
-        if self._pattern is None:
-            self._play(CLICK, volume=CLICK_VOLUME)
+    def click(self, tone=(2600, 18)):
+        """Key-press feedback, tone = (freq_hz, ms). Skipped while any alert
+        pattern is playing, so a tap never cuts off or masks an alarm."""
+        if self._pattern is None or self._volume == CLICK_VOLUME:
+            self._play((tone,), volume=CLICK_VOLUME)   # a new tap replaces a click
 
     # -- policy --
     def silence(self, current_faults=()):

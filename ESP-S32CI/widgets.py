@@ -53,16 +53,16 @@ def label(parent, text, font=FONT_S, color=TEXT):
     return lb
 
 
-# Called on every button press (set by main.py to the speaker's click).
+# Key-press feedback: on_press(tone) runs on every button press (main.py sets
+# it to the speaker's click). Tones are (freq_hz, ms), by what the button does.
+TONE_NAV = (2600, 18)   # screen changes, selectors, Back, Cancel
+TONE_ADJ = (3400, 10)   # +/- steppers (they auto-repeat, so short and light)
+TONE_CMD = (1500, 35)   # sends a command: START/STOP, STERILIZE, EMPTY, RESET, Save, TARE, CAL
+TONE_ACK = (900, 60)    # acknowledging a fault
 on_press = None
 
 
-def _pressed(e):
-    if on_press is not None:
-        on_press()
-
-
-def button(parent, text, on_click, x, y, w, h, color=GREY, font=FONT_M):
+def button(parent, text, on_click, x, y, w, h, color=GREY, font=FONT_M, tone=TONE_NAV):
     b = lv.button(parent)
     b.set_pos(x, y)
     b.set_size(w, h)
@@ -73,7 +73,8 @@ def button(parent, text, on_click, x, y, w, h, color=GREY, font=FONT_M):
     lb.set_style_text_font(font, 0)
     lb.center()
     b.add_event_cb(lambda e: on_click(), lv.EVENT.CLICKED, None)
-    b.add_event_cb(_pressed, lv.EVENT.PRESSED, None)   # click on touch-down: feels immediate
+    # on touch-down, so it feels immediate
+    b.add_event_cb(lambda e: on_press and on_press(tone), lv.EVENT.PRESSED, None)
     return b
 
 

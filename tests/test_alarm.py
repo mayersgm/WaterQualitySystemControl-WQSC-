@@ -130,6 +130,23 @@ class ClickTest(unittest.TestCase):
         self.assertIs(self.a._pattern, alarm.FAULT)
         self.assertEqual(self.a._pwm.duty, alarm.VOLUME)
 
+    def test_click_uses_the_buttons_tone(self):
+        freqs = []
+        self.a._pwm.freq = freqs.append
+        self.a.click((1500, 35))
+        self.assertEqual(freqs, [1500])
+        self.advance(20)
+        self.assertEqual(self.a._pwm.duty, alarm.CLICK_VOLUME)   # 35 ms tone still sounding
+        self.advance(30)
+        self.assertEqual(self.a._pwm.duty, 0)
+
+    def test_rapid_taps_replace_the_click(self):
+        freqs = []
+        self.a._pwm.freq = freqs.append
+        self.a.click((900, 60))
+        self.a.click((3400, 10))
+        self.assertEqual(freqs, [900, 3400])
+
     def test_alarm_after_click_plays_at_full_volume(self):
         self.a.click()
         self.a.update(status(["overflow"]), True)

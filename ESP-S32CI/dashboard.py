@@ -146,7 +146,7 @@ class Dashboard:
                  w.PANEL, w.FONT_S)
         # shown only while a fault is latched; the fault names go in state_lbl
         self.btn_ack = w.button(self.banner, "ACK", on_ack,
-                                166, 2, 52, 26, lv.color_hex(0x7F0000), w.FONT_M)
+                                166, 2, 52, 26, lv.color_hex(0x7F0000), w.FONT_M, tone=w.TONE_ACK)
         self.btn_ack.add_flag(lv.obj.FLAG.HIDDEN)
 
         self.vessels = {
@@ -168,11 +168,15 @@ class Dashboard:
         self.t_tds1 = _Tile(self.scr, "TDS-1 DISTILL", 108)
         self.t_tds2 = _Tile(self.scr, "TDS-2 OUTLET", 214)
 
-        self.btn_start = w.button(self.scr, "START", self._start_stop, 2, 201, 76, 37, w.GREEN)
+        cmd = w.TONE_CMD
+        self.btn_start = w.button(self.scr, "START", self._start_stop, 2, 201, 76, 37, w.GREEN,
+                                  tone=cmd)
         self.btn_ster = w.button(self.scr, "STERILIZE", self._sterilize, 82, 201, 76, 37,
-                                 w.PURPLE, w.FONT_S)
-        self.btn_empty = w.button(self.scr, "EMPTY", self._empty, 162, 201, 76, 37, w.TEAL)
-        w.button(self.scr, "RESET", lambda: on_command("RESET"), 242, 201, 76, 37, w.GREY)
+                                 w.PURPLE, w.FONT_S, tone=cmd)
+        self.btn_empty = w.button(self.scr, "EMPTY", self._empty, 162, 201, 76, 37, w.TEAL,
+                                  tone=cmd)
+        w.button(self.scr, "RESET", lambda: on_command("RESET"), 242, 201, 76, 37, w.GREY,
+                 tone=cmd)
 
         lv.timer_create(self._animate, 150, None)
 

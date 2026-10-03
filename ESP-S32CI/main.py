@@ -70,7 +70,7 @@ class App:
         hw.init(exception_hook=self._on_lv_error)
 
         self.alarm = Alarm()
-        w.on_press = self.alarm.click
+        w.on_press = self.alarm.click        # called with the button's tone
         self.dashboard = Dashboard(self.send, self.show_cal, self.show_levels, self.ack)
         # Built on demand and deleted on return: LVGL allocates from the tight
         # MicroPython heap, and keeping all three screens alive left too little
@@ -130,11 +130,16 @@ class App:
         gc.collect()
 
     def show_cal(self):
+        # Free any other secondary screen first: rapid taps could otherwise
+        # build this one before step() deleted the last, holding two at once
+        # (safe here: only screens that aren't active get deleted).
+        self._close_secondary_screens()
         if self.cal is None:
             self.cal = CalibrationScreen(self.send, self.show_dashboard)
         self._show(self.cal)
 
     def show_levels(self):
+        self._close_secondary_screens()
         if self.levels is None:
             self.levels = SettingsScreen(self.send, self.show_dashboard)
         self.levels.load(self.limits)
