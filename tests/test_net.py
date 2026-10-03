@@ -157,6 +157,23 @@ class RemoteTest(unittest.TestCase):
         self.assertEqual(self.cmd("STOP")[0], 503)
         self.assertEqual(self.app.sent, [])
 
+    def test_test_push_needs_pin_and_stays_local(self):
+        self.r.pusher = notify.NtfyPusher("ntfy.sh", "t")
+        self.assertEqual(self.cmd("TEST_PUSH", pin="0000")[0], 403)
+        self.app.link_ok = False                     # works even with the Pico down
+        self.assertEqual(self.cmd("TEST_PUSH")[0], 200)
+        self.assertEqual([a[0] for a in self.r.pusher.queue], ["WQCS test alert"])
+        self.assertEqual((self.app.sent, self.app.acked), ([], 0))
+
+    def test_test_push_without_topic(self):
+        self.assertEqual(self.cmd("TEST_PUSH")[0], 400)
+
+    def test_status_reports_uptime_and_push_counters(self):
+        self.r.pusher = notify.NtfyPusher("ntfy.sh", "t")
+        snap = json.loads(self.r.handle("GET", "/status", b"", 7200500)[2])
+        self.assertEqual(snap["uptime_s"], 7200)
+        self.assertEqual(snap["push"], {"sent": 0, "failed": 0, "queued": 0})
+
     def test_lockout_after_repeated_wrong_pins(self):
         for _ in range(net.BAD_PIN_LIMIT):
             self.assertEqual(self.cmd("START", pin="1111")[0], 403)

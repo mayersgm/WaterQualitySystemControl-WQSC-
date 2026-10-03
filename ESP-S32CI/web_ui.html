@@ -66,7 +66,9 @@ background:#263445;font-size:15px;opacity:0;transition:opacity .3s;pointer-event
   <button id="b-empty" onclick="toggle('EMPTY')" style="background:var(--teal)">EMPTY</button>
   <button onclick="cmd('RESET')">RESET</button>
 </div>
-<div id="pinlink"><a href="#" onclick="forgetPin();return false" style="color:inherit">Change PIN</a></div>
+<div id="pinlink"><a href="#" onclick="cmd('TEST_PUSH');return false" style="color:inherit">Send test alert</a>
+  &nbsp;·&nbsp; <a href="#" onclick="forgetPin();return false" style="color:inherit">Change PIN</a>
+  <div id="diag" style="margin-top:6px"></div></div>
 <div id="toast"></div>
 
 <script>
@@ -149,6 +151,10 @@ function render(d){
   $("age").textContent = s.error ? "Pico: " + s.error
     : d.age_ms == null ? "no data yet" : `updated ${Math.round(d.age_ms/1000)} s ago`;
   $("wifi").textContent = d.rssi == null ? "" : `WiFi ${d.rssi} dBm`;
+  const up = d.uptime_s == null ? "" : `touchscreen up ${Math.floor(d.uptime_s/3600)} h ${Math.floor(d.uptime_s/60)%60} min`;
+  const p = d.push ? ` · alerts sent ${d.push.sent}, failed ${d.push.failed}` + (d.push.queued ? `, waiting ${d.push.queued}` : "")
+                   : " · push alerts off";
+  $("diag").textContent = up + p;
 
   for (const v of ["boiler","collector","reservoir"]) vessel(v, s[v+"_g"], d.limits);
   $("boiler-chips").innerHTML = chip("MAIN valve", valves.main) + chip("REFILL", valves.refill)
@@ -206,7 +212,7 @@ async function cmd(c, question){
     const r = await fetch("/cmd", {method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({cmd:c, pin})});
     const j = await r.json();
-    if (r.ok) { savePin(pin); toast(c+" sent"); }
+    if (r.ok) { savePin(pin); toast(c === "TEST_PUSH" ? "Test alert queued - check ntfy" : c+" sent"); }
     else { if (r.status === 403) forgetPin(); toast(j.err || ("error "+r.status)); }
   } catch (e) { toast("Couldn't reach the touchscreen"); }
   busy = false; if (last) render(last);

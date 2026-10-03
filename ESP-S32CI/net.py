@@ -19,7 +19,7 @@ import os
 import socket
 import time
 import network
-from notify import AlertEdges, NtfyPusher
+from notify import AlertEdges, NtfyPusher, DEFAULT
 
 ALLOWED = ("START", "STOP", "STERILIZE", "EMPTY", "RESET", "ACK")
 PAGE = "web_ui.html"
@@ -53,6 +53,13 @@ class WiFi:
             pass
         self.wlan = network.WLAN(network.STA_IF)
         self.wlan.active(True)
+        try:
+            # Power saving made the HMI unreachable after idling: the radio
+            # naps between beacons and new connections time out until
+            # traffic wakes it (seen 2026-10-02). It's on mains power.
+            self.wlan.config(pm=self.wlan.PM_NONE)
+        except (AttributeError, ValueError, OSError) as e:
+            print("wifi: can't disable power saving", e)
         self.ip = None
         self._last_try = None
         self._connect()
@@ -172,7 +179,11 @@ class Remote:
         age = None if app.last_rx is None else time.ticks_diff(now, app.last_rx)
         return {"link": app.link_ok, "age_ms": age, "status": app.link.last_status,
                 "limits": app.limits, "errors": app.link.link_errors,
-                "rssi": self.wifi.rssi() if self.wifi else None}
+                "rssi": self.wifi.rssi() if self.wifi else None,
+                "uptime_s": now // 1000,
+                "push": None if self.pusher is None else {
+                    "sent": self.pusher.sent, "failed": self.pusher.failed,
+                    "queued": len(self.pusher.queue)}}
 
     def _command(self, body, now):
         if self._locked_until is not None:
@@ -190,6 +201,11 @@ class Remote:
                 self._locked_until = time.ticks_add(now, BAD_PIN_LOCKOUT_MS)
             return self._json(403, {"err": "wrong PIN"})
         self._bad_pins = 0
+        if cmd == "TEST_PUSH":            # handled here; never relayed to the Pico
+            if self.pusher is None:
+                return self._json(400, {"err": "push alerts are off (no NTFY_TOPIC)"})
+            self.pusher.push("WQCS test alert", "Push alerts are working.", DEFAULT, "bell")
+            return self._json(200, {"ok": True, "cmd": cmd})
         if cmd not in ALLOWED:
             return self._json(400, {"err": "command not allowed remotely"})
         if not self.app.link_ok:
