@@ -31,6 +31,23 @@ Re-apply both after any fresh clone.
 - `lib/micropython/ports/esp32/boards/ESP32_GENERIC/mpconfigboard.h`: append
   `#define MICROPY_PY_BLUETOOTH (0)`. It goes with `CONFIG_BT_ENABLED=n` on the
   build line below.
+- `lib/micropython/ports/esp32/gccollect.c`, `gc_get_max_new_split()`: return
+  at most `free - MP_IDF_HEAP_RESERVE` (24 KB), not the whole largest free IDF
+  block. When LVGL needs room, the MicroPython heap grows by that amount. Stock
+  firmware handed it everything, leaving ~1.6 KB for WiFi and the touch
+  driver's I2C, which then aborted (`i2c_cmd_log_alloc_error`). Verified
+  2026-10-03: with the GC heap exhausted, the IDF heap stays at 24.6 KB free
+  and WiFi still works.
+
+Only the app partition changes between these rebuilds (same partition table),
+so flash just `micropython.bin` at `0x10000`. No `--erase-all`, so the board's
+files (`wifi_secrets.py`, logs) survive:
+```
+esptool.py --chip esp32 -p /dev/cu.usbserial-20144212 -b 460800 write_flash \
+  0x10000 ~/esp/lvgl_micropython/lib/micropython/ports/esp32/build-ESP32_GENERIC/micropython.bin
+```
+Compare `build/partitions.csv` with the previous build first. If it changed,
+do the full erase-and-flash below and redeploy every file.
 
 ## Why Bluetooth is off (rebuilt 2026-10-01 for Milestone 2)
 With Bluetooth compiled in, WiFi and the HMI didn't fit in RAM together, and

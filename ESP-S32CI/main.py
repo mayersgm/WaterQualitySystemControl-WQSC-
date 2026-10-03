@@ -87,7 +87,8 @@ class App:
         # hard-reset if they keep coming. Out of memory mid-render leaves
         # LVGL in an unknown state, so reset immediately (~3 s to recover).
         if isinstance(e, MemoryError):
-            print("MemoryError in render; hard reset")
+            # e carries the failed allocation size; the serial log keeps it
+            print("MemoryError in render (%s); hard reset" % e)
             machine.reset()
         log_crash("lvgl callback", e)
         now = time.ticks_ms()
