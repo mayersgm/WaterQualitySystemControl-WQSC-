@@ -106,5 +106,36 @@ class AlarmTest(unittest.TestCase):
         self.assertEqual(self.a._pwm.duty, 0)
 
 
+class ClickTest(unittest.TestCase):
+    def setUp(self):
+        FakeTime.now = 0
+        self.a = alarm.Alarm()
+
+    def advance(self, ms, st=None):
+        for _ in range(ms // 5):
+            FakeTime.now += 5
+            self.a.update(st, True)
+
+    def test_click_is_short_and_quiet(self):
+        self.a.click()
+        self.assertEqual(self.a._pwm.duty, alarm.CLICK_VOLUME)
+        self.assertLess(alarm.CLICK_VOLUME, alarm.VOLUME)
+        self.advance(40)
+        self.assertEqual(self.a._pwm.duty, 0)
+
+    def test_click_never_interrupts_an_alarm(self):
+        self.a.update(status(["overflow"]), True)
+        self.assertIs(self.a._pattern, alarm.FAULT)
+        self.a.click()
+        self.assertIs(self.a._pattern, alarm.FAULT)
+        self.assertEqual(self.a._pwm.duty, alarm.VOLUME)
+
+    def test_alarm_after_click_plays_at_full_volume(self):
+        self.a.click()
+        self.a.update(status(["overflow"]), True)
+        self.assertIs(self.a._pattern, alarm.FAULT)
+        self.assertEqual(self.a._pwm.duty, alarm.VOLUME)
+
+
 if __name__ == "__main__":
     unittest.main()

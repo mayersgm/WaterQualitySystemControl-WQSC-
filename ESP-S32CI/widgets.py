@@ -53,6 +53,15 @@ def label(parent, text, font=FONT_S, color=TEXT):
     return lb
 
 
+# Called on every button press (set by main.py to the speaker's click).
+on_press = None
+
+
+def _pressed(e):
+    if on_press is not None:
+        on_press()
+
+
 def button(parent, text, on_click, x, y, w, h, color=GREY, font=FONT_M):
     b = lv.button(parent)
     b.set_pos(x, y)
@@ -64,6 +73,7 @@ def button(parent, text, on_click, x, y, w, h, color=GREY, font=FONT_M):
     lb.set_style_text_font(font, 0)
     lb.center()
     b.add_event_cb(lambda e: on_click(), lv.EVENT.CLICKED, None)
+    b.add_event_cb(_pressed, lv.EVENT.PRESSED, None)   # click on touch-down: feels immediate
     return b
 
 

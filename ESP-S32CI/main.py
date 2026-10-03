@@ -70,6 +70,7 @@ class App:
         hw.init(exception_hook=self._on_lv_error)
 
         self.alarm = Alarm()
+        w.on_press = self.alarm.click
         self.dashboard = Dashboard(self.send, self.show_cal, self.show_levels, self.ack)
         # Built on demand and deleted on return: LVGL allocates from the tight
         # MicroPython heap, and keeping all three screens alive left too little

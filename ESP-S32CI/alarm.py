@@ -6,6 +6,7 @@ update() every main-loop pass; patterns are sequenced from ticks_ms.
   - new fault latched     -> urgent repeating beep until ACK (silence())
   - TDS-2 alert / STANDBY -> one short chime when it starts
   - link to Pico lost     -> double beep, twice
+  - touchscreen button    -> short quiet click (click()), never over an alarm
 
 ACK silences faults already latched; the alarm only sounds again for a fault
 that wasn't latched at ACK time, or one that clears and comes back. ACK also
@@ -17,18 +18,21 @@ from machine import Pin, PWM
 
 SPEAKER_PIN = 26
 VOLUME = 16384  # duty_u16; 32768 = loudest square wave
+CLICK_VOLUME = 4096
 ACK_GRACE_MS = 30000
 
 # (freq_hz, ms) steps; freq 0 = silence. "repeat" patterns loop until stopped.
 FAULT = ((2400, 160), (0, 90), (2400, 160), (0, 700))
 CHIME = ((1600, 120), (0, 60), (2000, 160))
 LINK_LOST = ((700, 200), (0, 150), (700, 200), (0, 900)) * 2
+CLICK = ((2600, 18),)
 
 
 class Alarm:
     def __init__(self, pin=SPEAKER_PIN):
         self._pwm = PWM(Pin(pin), freq=1000, duty_u16=0)
         self._pattern = None
+        self._volume = VOLUME
         self._repeat = False
         self._step = 0
         self._step_end = 0
@@ -40,15 +44,16 @@ class Alarm:
         self._prev_link = True
 
     # -- pattern player --
-    def _play(self, pattern, repeat=False):
+    def _play(self, pattern, repeat=False, volume=VOLUME):
         self._pattern, self._repeat, self._step = pattern, repeat, 0
+        self._volume = volume
         self._start_step()
 
     def _start_step(self):
         freq, ms = self._pattern[self._step]
         if freq:
             self._pwm.freq(freq)
-            self._pwm.duty_u16(VOLUME)
+            self._pwm.duty_u16(self._volume)
         else:
             self._pwm.duty_u16(0)
         self._step_end = time.ticks_add(time.ticks_ms(), ms)
@@ -67,6 +72,12 @@ class Alarm:
     def stop(self):
         self._pattern = None
         self._pwm.duty_u16(0)
+
+    def click(self):
+        """Key-press feedback. Skipped while any alert pattern is playing, so
+        a tap never cuts off or masks an alarm."""
+        if self._pattern is None:
+            self._play(CLICK, volume=CLICK_VOLUME)
 
     # -- policy --
     def silence(self, current_faults=()):
