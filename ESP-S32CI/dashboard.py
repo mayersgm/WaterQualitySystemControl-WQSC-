@@ -49,8 +49,12 @@ class _Vessel:
         self.bar.set_pos(8, BAR_Y)
         self.bar.set_size(40, BAR_H)
         self.bar.set_range(0, 100)
+        # Indicator radius must be >= the bar's: if it's smaller, LVGL clips
+        # the indicator through an ARGB8888 layer (40x70x4 = 11 KB) on every
+        # redraw, which fragmented the heap until rendering hit MemoryError
+        # (lv_bar.c draw_indic "radius_issue", 2026-10-03).
         self.bar.set_style_radius(4, 0)
-        self.bar.set_style_radius(2, lv.PART.INDICATOR)
+        self.bar.set_style_radius(4, lv.PART.INDICATOR)
         self.bar.set_style_bg_color(lv.color_hex(0x0B1015), 0)
         self.bar.set_style_bg_opa(lv.OPA.COVER, 0)
         self.bar.set_style_bg_color(w.WATER, lv.PART.INDICATOR)
