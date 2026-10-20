@@ -8,6 +8,11 @@ Rebuilds from the Fusion export WQCS_Enclosure_v1.step (no feature history):
      LIFT, and the gap is filled with that same profile. Walls, cross wall and
      corner posts get longer; glands, rim and lid snap-fit move up together, so
      the v1 lid still fits. The front (display / main-PCB) section is untouched.
+  1b. Second TDS board mount (2026-10-19): the display section's left inner
+     wall carries the EK2169 TDS board on two vertical rails (3.5 wide x 3 mm,
+     dia 1.5 pilots on a 25 x 35 mm pattern). Both TDS boards must sit there, away from the
+     water valves in case of a leak, so the rails are copied TDS2_DY along
+     the wall for the second board.
   2. Display cover (BUILD_COVER, off until the display section is decided): a
      flush inset plate for the front section's top opening (replaces the old
      PyPortal cover), sitting on the four corner pads, with a window over the
@@ -35,6 +40,15 @@ LIFT_Y0, LIFT_Y1 = -200.0, -20.0   # main body; the front section starts at y -2
 SPLIT_Z = 5.5        # band [SPLIT_Z - LIFT, SPLIT_Z] lies in the plain wall band z -0.5..6.0
 LIFT = 4.0           # +4 mm, lying horizontally with the display facing up
 BUILD_COVER = False
+
+# ---- second TDS board (EK2169, 42 x 32 mm, holes 35 x 25) -------------------
+ADD_TDS2 = True
+# two vertical rails (3.5 wide x 3 deep, floor to z 0.75), dia 1.5 pilot near each end
+TDS_BOSS_REGION = ((-75.45, -72.40), (-8.0, 22.5), (-41.45, 1.5))   # x, y, z ranges
+TDS1_HOLES_Y = (-5.5, 19.5)
+TDS_HOLES_Z = (-36.0, -1.0)
+TDS_BOARD = (42.0, 32.0)    # tall (z) x wide (y)
+TDS2_DY = 34.0              # board 2 at y 25..57: ~2 mm to board 1 and to the corner post (y 58.8)
 
 # ---- front-section opening (measured from v1) -------------------------------
 OPEN_X0, OPEN_X1 = -75.5, 34.5     # 110 mm
@@ -79,6 +93,26 @@ def lift_front_section(src):
     out = rest.fuse(band.translate(cq.Vector(0, 0, LIFT))).fuse(upper.translate(cq.Vector(0, 0, LIFT)))
     out = out.clean().fix()   # boolean seams can leave tolerance flags; fix() clears them
     return s, out, band
+
+
+def add_tds2(enclosure):
+    (x0, x1), (y0, y1), (z0, z1) = TDS_BOSS_REGION
+    bosses = enclosure.intersect(cq.Solid.makeBox(x1 - x0, y1 - y0, z1 - z0, cq.Vector(x0, y0, z0)))
+    n = len(bosses.Solids())
+    if n != 2:
+        raise RuntimeError("expected the 2 TDS rails in TDS_BOSS_REGION, found %d solids" % n)
+    return enclosure.fuse(bosses.translate(cq.Vector(0, TDS2_DY, 0))).clean().fix()
+
+
+def tds_standins():
+    """42 x 32 x 1.6 boards on the bosses (review only), plus a 10 mm component zone."""
+    out = []
+    cz = sum(TDS_HOLES_Z) / 2
+    for dy in (0.0, TDS2_DY):
+        cy = sum(TDS1_HOLES_Y) / 2 + dy
+        out.append(cq.Solid.makeBox(1.6 + 10.0, TDS_BOARD[1], TDS_BOARD[0],
+                                    cq.Vector(-72.45, cy - TDS_BOARD[1] / 2, cz - TDS_BOARD[0] / 2)))
+    return out
 
 
 def display_cover():
@@ -128,6 +162,20 @@ def main():
     bb = v2.BoundingBox()
     print("enclosure v2 bbox: %.1f x %.1f x %.1f mm (z %.2f..%.2f)" % (
         bb.xlen, bb.ylen, bb.zlen, bb.zmin, bb.zmax))
+    if ADD_TDS2:
+        before = v2.Volume()
+        v2 = add_tds2(v2)
+        print("added TDS-2 bosses (+%.1f mm^3), valid=%s" % (v2.Volume() - before, v2.isValid()))
+        boards = tds_standins()
+        for i, b in enumerate(boards):
+            print("  TDS board %d stand-in: overlap with enclosure %.2f mm^3, y %.1f..%.1f" % (
+                i + 1, b.intersect(v2).Volume(), b.BoundingBox().ymin, b.BoundingBox().ymax))
+        print("  boards overlap each other: %.2f mm^3" % boards[0].intersect(boards[1]).Volume())
+        fit = cq.Assembly()
+        fit.add(v2, name="enclosure_v2", color=cq.Color(0.6, 0.7, 0.9))
+        for i, b in enumerate(boards):
+            fit.add(b, name="tds%d_standin" % (i + 1), color=cq.Color(0.3, 0.6, 0.3))
+        fit.export(os.path.join(HERE, "WQCS_v2_tds_fit_check.step"))
     cq.exporters.export(cq.Workplane().add(v2), os.path.join(HERE, "WQCS_Enclosure_v2.step"))
     print("wrote WQCS_Enclosure_v2.step")
     if not BUILD_COVER:
