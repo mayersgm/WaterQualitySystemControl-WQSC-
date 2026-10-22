@@ -8,6 +8,11 @@ Rebuilds from the Fusion export WQCS_Enclosure_v1.step (no feature history):
      LIFT, and the gap is filled with that same profile. Walls, cross wall and
      corner posts get longer; glands, rim and lid snap-fit move up together, so
      the v1 lid still fits. The front (display / main-PCB) section is untouched.
+  1a. Display/PCB section +FRONT_LIFT (2026-10-21, user: 48 -> ~58 mm inside):
+     same method, split at FRONT_SPLIT_Z inside that section's plain wall band
+     (z -15..-2). Rim, cover pads and their pilots, and corner-post tops move
+     up together. The old left-wall TDS-1 rails are removed before the lifts
+     so they aren't stretched.
   1b. TDS board mounts (2026-10-21): both EK2169 TDS boards sit in the
      display section, away from the water valves in case of a leak. The left
      wall's original TDS-1 rails are removed (the MOSFETs, screw terminals
@@ -56,6 +61,9 @@ SRC = os.path.join(HERE, "WQCS_Enclosure_v1.step")
 LIFT_Y0, LIFT_Y1 = -200.0, -20.0   # main body; the front section starts at y -20
 SPLIT_Z = 5.5        # band [SPLIT_Z - LIFT, SPLIT_Z] lies in the plain wall band z -0.5..6.0
 LIFT = 4.0           # +4 mm, lying horizontally with the display facing up
+FRONT_Y0 = -20.0     # display/PCB section: y -20 and beyond
+FRONT_SPLIT_Z = -3.0 # band [FRONT_SPLIT_Z - FRONT_LIFT, FRONT_SPLIT_Z] lies in its plain band z -15..-2
+FRONT_LIFT = 10.0    # inside height 48 -> 58 mm
 BUILD_COVER = False
 
 # ---- TDS boards (EK2169, 42 x 32 x 1.6 mm, holes 35 x 25, M2 into dia 1.5 pilots)
@@ -67,20 +75,19 @@ TDS_PART_H = 6.0           # ** measure **: tallest part on the TDS board's fron
 OLD_TDS1_RAILS = ((-75.5, -72.40), (-8.0, 22.5), (-41.45, 1.5))   # x, y, z ranges
 # (name, wall inner face y, direction into the section, board centre x, centre z)
 TDS_MOUNTS = (
-    ("TDS-1", 64.0, -1, -48.6, -12.5),   # top wall, left half: clears the PCB's top-edge connectors
-                                         # (x -27.2..-2.6) by ~0.5 mm and the corner post by ~0.6 mm
-    ("TDS-2", -16.0, +1, -24.0, -12.5),  # bottom wall; x -45..-3 clears the harness slot (x -70.5..-63.5)
-)                                        # z -28.5..3.5: above the PCB's edge parts, below the cover pads (z 4)
+    ("TDS-1", 64.0, -1, -24.0, -2.5),    # top wall, centred
+    ("TDS-2", -16.0, +1, -24.0, -2.5),   # bottom wall, above the harness slot
+)   # z -18.5..13.5: >= 7 mm above every main-PCB edge part, below the cover pads (z 14 after FRONT_LIFT)
 
 # ---- main PCB (CAD/wqcs_pcb.step), as installed (photo IMG_6380) -------------
 PCB_STEP = os.path.join(HERE, "wqcs_pcb.step")
 PCB_HOLE_TO_STANDOFF = ((3.17, -20.98), (-61.7, -7.8))   # model hole -> enclosure standoff, no rotation
-PCB_RAISE = 4.0           # standoffs 6 -> 10 mm for the harness underneath
+PCB_RAISE = 6.0           # standoffs 6 -> 12 mm: ~10 mm under the board for the harness
 STANDOFFS = [(-61.7, -7.8), (-61.7, 55.8), (20.8, -7.8), (20.8, 55.8)]
 STANDOFF_OD, STANDOFF_PILOT = 8.0, 2.8
 PCB_STANDOFF_TOP = -35.5 + PCB_RAISE
 # floor-level harness slot through the shared wall (y -22..-16), rounded ends
-HARNESS_SLOT = dict(cx=-20.5, w=30.0, z0=-41.0, h=9.0, wall_y=(-22.5, -15.5))
+HARNESS_SLOT = dict(cx=-20.5, w=30.0, z0=-41.0, h=11.0, wall_y=(-22.5, -15.5))   # ~304 mm^2
 PCB_T = 1.6                # the model's board body is only 0.34 mm; real boards are 1.6
 PCB_MODEL_TOP = 0.33       # model z where parts start
 
@@ -88,7 +95,7 @@ PCB_MODEL_TOP = 0.33       # model z where parts start
 OPEN_X0, OPEN_X1 = -75.5, 34.5     # 110 mm
 OPEN_Y0, OPEN_Y1 = -16.0, 64.0     # 80 mm
 OPEN_CORNER_R = 2.0
-RIM_Z_V1 = 6.5                     # front rim top (unchanged in v2); corner pads 2.5 mm below it
+RIM_Z_V1 = 6.5                     # front rim top in v1 (v2: + FRONT_LIFT); corner pads 2.5 mm below it
 PAD_DEPTH = 2.5
 COVER_PILOTS = [(-72.7, -13.2), (-72.7, 61.2), (31.8, -13.2), (31.8, 61.2)]  # dia 2.0 pilots in the pads
 
@@ -114,19 +121,19 @@ STANDOFF_D = 6.0
 STANDOFF_PILOT_D = 2.5     # M3 self-tapper (use 4.0 for an M3 heat-set insert)
 
 
-def lift_main_body(src):
-    s = cq.importers.importStep(src).val()
+def lift_region(s, y0, y1, split_z, amount):
+    """Raise everything in y0..y1 above split_z by amount, filling the gap with
+    the wall profile just below the split (must be a plain, prismatic band)."""
     big = 400.0
 
-    def box(y0, y1, z0, z1):
-        return cq.Solid.makeBox(big, y1 - y0, z1 - z0, cq.Vector(-big / 2, y0, z0))
+    def box(ya, yb, za, zb):
+        return cq.Solid.makeBox(big, yb - ya, zb - za, cq.Vector(-big / 2, ya, za))
 
-    upper = s.intersect(box(LIFT_Y0, LIFT_Y1, SPLIT_Z, 200))
-    band = s.intersect(box(LIFT_Y0, LIFT_Y1, SPLIT_Z - LIFT, SPLIT_Z))
-    rest = s.cut(box(LIFT_Y0, LIFT_Y1, SPLIT_Z, 200))
-    out = rest.fuse(band.translate(cq.Vector(0, 0, LIFT))).fuse(upper.translate(cq.Vector(0, 0, LIFT)))
-    out = out.clean().fix()   # boolean seams can leave tolerance flags; fix() clears them
-    return s, out, band
+    upper = s.intersect(box(y0, y1, split_z, 200))
+    band = s.intersect(box(y0, y1, split_z - amount, split_z))
+    rest = s.cut(box(y0, y1, split_z, 200))
+    out = rest.fuse(band.translate(cq.Vector(0, 0, amount))).fuse(upper.translate(cq.Vector(0, 0, amount)))
+    return out.clean().fix(), band   # fix(): boolean seams can leave tolerance flags
 
 
 def raise_standoffs(enclosure):
@@ -204,7 +211,7 @@ def display_cover():
     cx, cy = (OPEN_X0 + OPEN_X1) / 2, (OPEN_Y0 + OPEN_Y1) / 2
     bx = cx if CYD_CX is None else CYD_CX
     by = cy if CYD_CY is None else CYD_CY
-    top = RIM_Z_V1
+    top = RIM_Z_V1 + FRONT_LIFT
     plate = (cq.Workplane("XY").workplane(offset=top - COVER_T)
              .center(cx, cy).rect(w, h).extrude(COVER_T)
              .edges("|Z").fillet(OPEN_CORNER_R))
@@ -237,11 +244,16 @@ def display_cover():
 
 
 def main():
-    v1, v2, band = lift_main_body(SRC)
-    dv = v2.Volume() - v1.Volume()
-    print("enclosure v1 %.1f cm^3 -> v2 %.1f cm^3 (+%.2f, band %.2f)  valid=%s solids=%d" % (
-        v1.Volume() / 1000, v2.Volume() / 1000, dv / 1000, band.Volume() / 1000,
-        v2.isValid(), len(v2.Solids())))
+    v1 = cq.importers.importStep(SRC).val()
+    v2, removed = remove_old_tds1_rails(v1)
+    print("removed the old left-wall TDS-1 rails (%.1f mm^3)" % removed)
+    v2, band = lift_region(v2, LIFT_Y0, LIFT_Y1, SPLIT_Z, LIFT)
+    print("mechanical section +%.0f mm (band %.2f cm^3)" % (LIFT, band.Volume() / 1000))
+    v2, band = lift_region(v2, FRONT_Y0, 200.0, FRONT_SPLIT_Z, FRONT_LIFT)
+    print("display/PCB section +%.0f mm (band %.2f cm^3), inside height %.0f mm" % (
+        FRONT_LIFT, band.Volume() / 1000, 48 + FRONT_LIFT))
+    print("enclosure v1 %.1f cm^3 -> v2 %.1f cm^3  valid=%s solids=%d" % (
+        v1.Volume() / 1000, v2.Volume() / 1000, v2.isValid(), len(v2.Solids())))
     bb = v2.BoundingBox()
     print("enclosure v2 bbox: %.1f x %.1f x %.1f mm (z %.2f..%.2f)" % (
         bb.xlen, bb.ylen, bb.zlen, bb.zmin, bb.zmax))
@@ -254,8 +266,6 @@ def main():
     area = hs["w"] * hs["h"] - (4 - 3.14159) * (hs["h"] / 2) ** 2
     print("harness slot %.0f x %.0f mm (%.0f mm^2) at x %.1f, z %.1f..%.1f: removed %.1f mm^3, valid=%s" % (
         hs["w"], hs["h"], area, hs["cx"], hs["z0"], hs["z0"] + hs["h"], cut, v2.isValid()))
-    v2, removed = remove_old_tds1_rails(v2)
-    print("removed the old left-wall TDS-1 rails (%.1f mm^3)" % removed)
     for name, wall_y, inward, cx, cz in TDS_MOUNTS:
         before = v2.Volume()
         for rail in tds_rails(wall_y, inward, cx, cz):
