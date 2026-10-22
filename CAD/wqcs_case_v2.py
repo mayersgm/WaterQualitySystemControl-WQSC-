@@ -8,11 +8,18 @@ Rebuilds from the Fusion export WQCS_Enclosure_v1.step (no feature history):
      LIFT, and the gap is filled with that same profile. Walls, cross wall and
      corner posts get longer; glands, rim and lid snap-fit move up together, so
      the v1 lid still fits. The front (display / main-PCB) section is untouched.
-  1b. Second TDS board mount (2026-10-19): the display section's left inner
-     wall carries the EK2169 TDS board on two vertical rails (3.5 wide x 3 mm,
-     dia 1.5 pilots on a 25 x 35 mm pattern). Both TDS boards must sit there, away from the
-     water valves in case of a leak, so the rails are copied TDS2_DY along
-     the wall for the second board.
+  1b. Second TDS board mount (2026-10-21): both EK2169 TDS boards must sit in
+     the display section, away from the water valves in case of a leak. TDS-1
+     stays on its existing rails on the left inner wall (3.5 wide x 3 mm, dia
+     1.5 pilots, 25 x 35 mm pattern). The photos show no room there for a
+     second (MOSFETs, screw terminals and wiring), so TDS-2 gets matching
+     rails on the bottom wall (inner face y -16, shared with the mechanical
+     section). It lies along the wall (42 mm in x, 32 mm in z), above the main
+     PCB's bottom-edge parts (<= 3.8 mm), clear of the harness slot in that
+     wall's lower-left corner.
+  1c. Fit check (review only): enclosure + the real main PCB (wqcs_pcb.step,
+     placed on its floor standoffs as installed) + TDS stand-in boards, with
+     clash volumes printed.
   2. Display cover (BUILD_COVER, off until the display section is decided): a
      flush inset plate for the front section's top opening (replaces the old
      PyPortal cover), sitting on the four corner pads, with a window over the
@@ -41,14 +48,23 @@ SPLIT_Z = 5.5        # band [SPLIT_Z - LIFT, SPLIT_Z] lies in the plain wall ban
 LIFT = 4.0           # +4 mm, lying horizontally with the display facing up
 BUILD_COVER = False
 
-# ---- second TDS board (EK2169, 42 x 32 mm, holes 35 x 25) -------------------
+# ---- TDS boards (EK2169, 42 x 32 x 1.6 mm, holes 35 x 25, M2 into dia 1.5 pilots)
 ADD_TDS2 = True
-# two vertical rails (3.5 wide x 3 deep, floor to z 0.75), dia 1.5 pilot near each end
-TDS_BOSS_REGION = ((-75.45, -72.40), (-8.0, 22.5), (-41.45, 1.5))   # x, y, z ranges
-TDS1_HOLES_Y = (-5.5, 19.5)
-TDS_HOLES_Z = (-36.0, -1.0)
-TDS_BOARD = (42.0, 32.0)    # tall (z) x wide (y)
-TDS2_DY = 34.0              # board 2 at y 25..57: ~2 mm to board 1 and to the corner post (y 58.8)
+TDS_RAIL_W, TDS_RAIL_D, TDS_PILOT_D = 3.5, 3.0, 1.5   # as on the existing TDS-1 rails
+TDS_HOLES = (35.0, 25.0)
+TDS_BOARD = (42.0, 32.0)
+TDS_PART_H = 6.0           # ** measure **: tallest part on the TDS board's front
+TDS1_HOLES_Y, TDS1_HOLES_Z = (-5.5, 19.5), (-36.0, -1.0)   # existing, left wall x -75.5
+BOTTOM_WALL_Y = -16.0      # inner face of the wall shared with the mechanical section
+TDS2_CX = -24.0            # board x -45..-3: clear of the harness slot (x -70.5..-63.5)
+TDS2_CZ = -12.5            # board z -28.5..3.5: above the PCB's edge parts, below the cover pads (z 4)
+
+# ---- main PCB (CAD/wqcs_pcb.step), as installed (photo IMG_6380) -------------
+PCB_STEP = os.path.join(HERE, "wqcs_pcb.step")
+PCB_HOLE_TO_STANDOFF = ((3.17, -20.98), (-61.7, -7.8))   # model hole -> enclosure standoff, no rotation
+PCB_STANDOFF_TOP = -35.5
+PCB_T = 1.6                # the model's board body is only 0.34 mm; real boards are 1.6
+PCB_MODEL_TOP = 0.33       # model z where parts start
 
 # ---- front-section opening (measured from v1) -------------------------------
 OPEN_X0, OPEN_X1 = -75.5, 34.5     # 110 mm
@@ -80,7 +96,7 @@ STANDOFF_D = 6.0
 STANDOFF_PILOT_D = 2.5     # M3 self-tapper (use 4.0 for an M3 heat-set insert)
 
 
-def lift_front_section(src):
+def lift_main_body(src):
     s = cq.importers.importStep(src).val()
     big = 400.0
 
@@ -96,23 +112,42 @@ def lift_front_section(src):
 
 
 def add_tds2(enclosure):
-    (x0, x1), (y0, y1), (z0, z1) = TDS_BOSS_REGION
-    bosses = enclosure.intersect(cq.Solid.makeBox(x1 - x0, y1 - y0, z1 - z0, cq.Vector(x0, y0, z0)))
-    n = len(bosses.Solids())
-    if n != 2:
-        raise RuntimeError("expected the 2 TDS rails in TDS_BOSS_REGION, found %d solids" % n)
-    return enclosure.fuse(bosses.translate(cq.Vector(0, TDS2_DY, 0))).clean().fix()
+    """Two vertical rails on the bottom wall, one under each pair of holes."""
+    hz = (TDS2_CZ - TDS_HOLES[1] / 2, TDS2_CZ + TDS_HOLES[1] / 2)
+    z0, z1 = hz[0] - TDS_RAIL_W / 2 - 1.0, hz[1] + TDS_RAIL_W / 2 + 1.0
+    out = enclosure
+    for hx in (TDS2_CX - TDS_HOLES[0] / 2, TDS2_CX + TDS_HOLES[0] / 2):
+        rail = cq.Solid.makeBox(TDS_RAIL_W, TDS_RAIL_D, z1 - z0,
+                                cq.Vector(hx - TDS_RAIL_W / 2, BOTTOM_WALL_Y, z0))
+        for z in hz:
+            rail = rail.cut(cq.Solid.makeCylinder(TDS_PILOT_D / 2, TDS_RAIL_D + 0.2,
+                                                  cq.Vector(hx, BOTTOM_WALL_Y - 0.1, z), cq.Vector(0, 1, 0)))
+        out = out.fuse(rail)
+    return out.clean().fix()
 
 
 def tds_standins():
-    """42 x 32 x 1.6 boards on the bosses (review only), plus a 10 mm component zone."""
-    out = []
-    cz = sum(TDS_HOLES_Z) / 2
-    for dy in (0.0, TDS2_DY):
-        cy = sum(TDS1_HOLES_Y) / 2 + dy
-        out.append(cq.Solid.makeBox(1.6 + 10.0, TDS_BOARD[1], TDS_BOARD[0],
-                                    cq.Vector(-72.45, cy - TDS_BOARD[1] / 2, cz - TDS_BOARD[0] / 2)))
-    return out
+    """Each board (1.6 mm) plus its TDS_PART_H part zone, on its rails (review only)."""
+    w, h = TDS_BOARD
+    depth = 1.6 + TDS_PART_H
+    x_face = -75.5 + TDS_RAIL_D     # TDS-1 back face on its rails
+    y1c, z1c = sum(TDS1_HOLES_Y) / 2, sum(TDS1_HOLES_Z) / 2
+    tds1 = cq.Solid.makeBox(depth, h, w, cq.Vector(x_face, y1c - h / 2, z1c - w / 2))
+    y_face = BOTTOM_WALL_Y + TDS_RAIL_D
+    tds2 = cq.Solid.makeBox(w, depth, h, cq.Vector(TDS2_CX - w / 2, y_face, TDS2_CZ - h / 2))
+    return [tds1, tds2]
+
+
+def main_pcb():
+    """The installed main PCB: model hole -> enclosure standoff, parts lifted for a 1.6 mm board."""
+    (hx, hy), (sx, sy) = PCB_HOLE_TO_STANDOFF
+    dz = PCB_STANDOFF_TOP + PCB_T - PCB_MODEL_TOP
+    sols = cq.importers.importStep(PCB_STEP).solids().vals()
+    parts = [p.translate(cq.Vector(sx - hx, sy - hy, dz)) for p in sols if p.BoundingBox().xlen < 80]
+    bb = sols[0].BoundingBox()
+    board = cq.Solid.makeBox(bb.xlen, bb.ylen, PCB_T,
+                             cq.Vector(bb.xmin + sx - hx, bb.ymin + sy - hy, PCB_STANDOFF_TOP))
+    return board, cq.Compound.makeCompound(parts)
 
 
 def display_cover():
@@ -154,7 +189,7 @@ def display_cover():
 
 
 def main():
-    v1, v2, band = lift_front_section(SRC)
+    v1, v2, band = lift_main_body(SRC)
     dv = v2.Volume() - v1.Volume()
     print("enclosure v1 %.1f cm^3 -> v2 %.1f cm^3 (+%.2f, band %.2f)  valid=%s solids=%d" % (
         v1.Volume() / 1000, v2.Volume() / 1000, dv / 1000, band.Volume() / 1000,
@@ -165,17 +200,22 @@ def main():
     if ADD_TDS2:
         before = v2.Volume()
         v2 = add_tds2(v2)
-        print("added TDS-2 bosses (+%.1f mm^3), valid=%s" % (v2.Volume() - before, v2.isValid()))
-        boards = tds_standins()
-        for i, b in enumerate(boards):
-            print("  TDS board %d stand-in: overlap with enclosure %.2f mm^3, y %.1f..%.1f" % (
-                i + 1, b.intersect(v2).Volume(), b.BoundingBox().ymin, b.BoundingBox().ymax))
-        print("  boards overlap each other: %.2f mm^3" % boards[0].intersect(boards[1]).Volume())
-        fit = cq.Assembly()
-        fit.add(v2, name="enclosure_v2", color=cq.Color(0.6, 0.7, 0.9))
-        for i, b in enumerate(boards):
-            fit.add(b, name="tds%d_standin" % (i + 1), color=cq.Color(0.3, 0.6, 0.3))
-        fit.export(os.path.join(HERE, "WQCS_v2_tds_fit_check.step"))
+        print("added TDS-2 rails on the bottom wall (+%.1f mm^3), valid=%s" % (v2.Volume() - before, v2.isValid()))
+    boards = tds_standins()
+    board, parts = main_pcb()
+    print("fit check (mm^3 of overlap; TDS boxes include a %.0f mm part zone):" % TDS_PART_H)
+    for i, b in enumerate(boards):
+        print("  TDS-%d vs enclosure %.2f, vs main PCB parts %.2f, vs main PCB board %.2f" % (
+            i + 1, b.intersect(v2).Volume(), b.intersect(parts).Volume(), b.intersect(board).Volume()))
+    print("  main PCB parts vs enclosure %.2f, board vs enclosure %.2f" % (
+        parts.intersect(v2).Volume(), board.intersect(v2).Volume()))
+    fit = cq.Assembly()
+    fit.add(v2, name="enclosure_v2", color=cq.Color(0.6, 0.7, 0.9))
+    fit.add(board, name="main_pcb", color=cq.Color(0.8, 0.2, 0.2))
+    fit.add(parts, name="main_pcb_parts", color=cq.Color(0.2, 0.2, 0.2))
+    for i, b in enumerate(boards):
+        fit.add(b, name="tds%d_standin" % (i + 1), color=cq.Color(0.3, 0.6, 0.3))
+    fit.export(os.path.join(HERE, "WQCS_v2_fit_check.step"))
     cq.exporters.export(cq.Workplane().add(v2), os.path.join(HERE, "WQCS_Enclosure_v2.step"))
     print("wrote WQCS_Enclosure_v2.step")
     if not BUILD_COVER:
@@ -192,8 +232,8 @@ def main():
     asm.add(v2, name="enclosure_v2", color=cq.Color(0.6, 0.7, 0.9))
     asm.add(cover, name="display_cover", color=cq.Color(0.95, 0.7, 0.4))
     asm.add(cyd, name="cyd_standin", color=cq.Color(0.3, 0.6, 0.3))
-    asm.save(os.path.join(HERE, "WQCS_v2_fit_check.step"))
-    print("wrote WQCS_Display_Cover_v1.step, WQCS_v2_fit_check.step")
+    asm.export(os.path.join(HERE, "WQCS_v2_cover_fit_check.step"))
+    print("wrote WQCS_Display_Cover_v1.step, WQCS_v2_cover_fit_check.step")
 
 
 if __name__ == "__main__":
