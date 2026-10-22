@@ -19,6 +19,14 @@ Rebuilds from the Fusion export WQCS_Enclosure_v1.step (no feature history):
        TDS-2 on the bottom wall (inner face y -16, shared with the mechanical
          section), clear of the harness slot in its lower-left corner.
      Both sit above the main PCB's edge parts (<= 3.8 mm within reach).
+  1b2. Harness under the main PCB (2026-10-21): 5 cables dia 4 (2x TDS, 3x
+     scales) + 8 wires 18-20 AWG (4 pairs: boiler sw, refill valve, main
+     valve, transfer valve) = ~96 mm^2. The four floor standoffs grow
+     PCB_RAISE (6 -> 10 mm), leaving ~8 mm under the board after ~2 mm of
+     solder leads: the cables lie flat with the wires on top (~6.3 mm). A
+     floor-level slot (HARNESS_SLOT, ~253 mm^2, < 40 % fill so plugs pull
+     through) goes through the wall shared with the mechanical section,
+     centred under the board. The old high slot on the left stays as a spare.
   1c. Fit check (review only): enclosure + the real main PCB (wqcs_pcb.step,
      placed on its floor standoffs as installed) + TDS stand-in boards, with
      clash volumes printed.
@@ -59,14 +67,20 @@ TDS_PART_H = 6.0           # ** measure **: tallest part on the TDS board's fron
 OLD_TDS1_RAILS = ((-75.5, -72.40), (-8.0, 22.5), (-41.45, 1.5))   # x, y, z ranges
 # (name, wall inner face y, direction into the section, board centre x, centre z)
 TDS_MOUNTS = (
-    ("TDS-1", 64.0, -1, -24.0, -12.5),   # top wall
+    ("TDS-1", 64.0, -1, -48.6, -12.5),   # top wall, left half: clears the PCB's top-edge connectors
+                                         # (x -27.2..-2.6) by ~0.5 mm and the corner post by ~0.6 mm
     ("TDS-2", -16.0, +1, -24.0, -12.5),  # bottom wall; x -45..-3 clears the harness slot (x -70.5..-63.5)
 )                                        # z -28.5..3.5: above the PCB's edge parts, below the cover pads (z 4)
 
 # ---- main PCB (CAD/wqcs_pcb.step), as installed (photo IMG_6380) -------------
 PCB_STEP = os.path.join(HERE, "wqcs_pcb.step")
 PCB_HOLE_TO_STANDOFF = ((3.17, -20.98), (-61.7, -7.8))   # model hole -> enclosure standoff, no rotation
-PCB_STANDOFF_TOP = -35.5
+PCB_RAISE = 4.0           # standoffs 6 -> 10 mm for the harness underneath
+STANDOFFS = [(-61.7, -7.8), (-61.7, 55.8), (20.8, -7.8), (20.8, 55.8)]
+STANDOFF_OD, STANDOFF_PILOT = 8.0, 2.8
+PCB_STANDOFF_TOP = -35.5 + PCB_RAISE
+# floor-level harness slot through the shared wall (y -22..-16), rounded ends
+HARNESS_SLOT = dict(cx=-20.5, w=30.0, z0=-41.0, h=9.0, wall_y=(-22.5, -15.5))
 PCB_T = 1.6                # the model's board body is only 0.34 mm; real boards are 1.6
 PCB_MODEL_TOP = 0.33       # model z where parts start
 
@@ -113,6 +127,25 @@ def lift_main_body(src):
     out = rest.fuse(band.translate(cq.Vector(0, 0, LIFT))).fuse(upper.translate(cq.Vector(0, 0, LIFT)))
     out = out.clean().fix()   # boolean seams can leave tolerance flags; fix() clears them
     return s, out, band
+
+
+def raise_standoffs(enclosure):
+    """Extend the four floor standoffs by PCB_RAISE, pilot holes continued."""
+    out = enclosure
+    for x, y in STANDOFFS:
+        ext = (cq.Workplane("XY").workplane(offset=-35.5).center(x, y)
+               .circle(STANDOFF_OD / 2).circle(STANDOFF_PILOT / 2).extrude(PCB_RAISE)).val()
+        out = out.fuse(ext)
+    return out.clean().fix()
+
+
+def cut_harness_slot(enclosure):
+    hs = HARNESS_SLOT
+    y0, y1 = hs["wall_y"]
+    slot = (cq.Workplane("XZ", origin=(0, y1, 0))
+            .center(hs["cx"], hs["z0"] + hs["h"] / 2).slot2D(hs["w"], hs["h"]).extrude(y1 - y0)).val()
+    removed = enclosure.intersect(slot).Volume()
+    return enclosure.cut(slot).clean().fix(), removed, slot.Volume()
 
 
 def remove_old_tds1_rails(enclosure):
@@ -212,6 +245,15 @@ def main():
     bb = v2.BoundingBox()
     print("enclosure v2 bbox: %.1f x %.1f x %.1f mm (z %.2f..%.2f)" % (
         bb.xlen, bb.ylen, bb.zlen, bb.zmin, bb.zmax))
+    if PCB_RAISE:
+        before = v2.Volume()
+        v2 = raise_standoffs(v2)
+        print("standoffs +%.1f mm (+%.1f mm^3), valid=%s" % (PCB_RAISE, v2.Volume() - before, v2.isValid()))
+    v2, cut, slot_vol = cut_harness_slot(v2)
+    hs = HARNESS_SLOT
+    area = hs["w"] * hs["h"] - (4 - 3.14159) * (hs["h"] / 2) ** 2
+    print("harness slot %.0f x %.0f mm (%.0f mm^2) at x %.1f, z %.1f..%.1f: removed %.1f mm^3, valid=%s" % (
+        hs["w"], hs["h"], area, hs["cx"], hs["z0"], hs["z0"] + hs["h"], cut, v2.isValid()))
     v2, removed = remove_old_tds1_rails(v2)
     print("removed the old left-wall TDS-1 rails (%.1f mm^3)" % removed)
     for name, wall_y, inward, cx, cz in TDS_MOUNTS:
