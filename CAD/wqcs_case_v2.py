@@ -100,6 +100,13 @@ SPK_LIP_T = 1.0              # lip thickness (along x); entry chamfer over 80 %
 SPK_FINGERS, SPK_SLOT_W, SPK_SLOT_DEPTH = 6, 1.5, 4.5
 SPK_GRILLE_R, SPK_GRILLE_W, SPK_GRILLE_PITCH = 8.0, 1.6, 3.2   # slits through the wall
 COUPON = 35.0                # test coupon side (mm)
+
+# ---- USB-C access for the display (2026-10-22) -------------------------------
+# A standard USB-C plug into the CYD passes over the display section's right wall
+# top (rim z 16.5) with its underside at z ~15.64 (wqcs_display_v2.py prints the
+# plug position), so the rim gets a notch there.
+USB_RIM_NOTCH = (34.3, 40.0, 24.2 - 7.2, 24.2 + 7.2, 15.0, 16.6)   # x0, x1, y0, y1, z0, z1
+USB_PLUG_ENCL = (27.75, 60.0, 17.99, 30.39, 15.64, 22.14)          # from wqcs_display_v2.py
 WALL_OUTER_X = -77.5         # left wall outer face (2 mm wall)
 
 # ---- main PCB (CAD/wqcs_pcb.step), as installed (photo IMG_6380) -------------
@@ -333,6 +340,12 @@ def main():
         v2 = v2.clean().fix()
         print("added %s rails on the wall at y %.0f (+%.1f mm^3), valid=%s, solids=%d" % (
             name, wall_y, v2.Volume() - before, v2.isValid(), len(v2.Solids())))
+    x0, x1, y0, y1, z0, z1 = USB_RIM_NOTCH
+    v2 = v2.cut(cq.Solid.makeBox(x1 - x0, y1 - y0, z1 - z0, cq.Vector(x0, y0, z0))).clean().fix()
+    x0, x1, y0, y1, z0, z1 = USB_PLUG_ENCL
+    plug = cq.Solid.makeBox(x1 - x0, y1 - y0, z1 - z0, cq.Vector(x0, y0, z0))
+    print("USB-C rim notch: plug vs enclosure %.2f mm^3, valid=%s, solids=%d" % (
+        plug.intersect(v2).Volume(), v2.isValid(), len(v2.Solids())))
     housing, grille = speaker_housing()
     before = v2.Volume()
     v2 = v2.fuse(housing).cut(grille).clean().fix()

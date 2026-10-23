@@ -67,6 +67,16 @@ OLD_WINDOW = (-24.6, 24.6, 13.7, 79.1)   # x0, x1, z0, z1 (measured)
 # USB-C access through the ring's z+ end wall (case coordinates), centred on the
 # board's short axis, from just behind the bezel lip to the flange
 USB_NOTCH = dict(cx=31.7, w=14.0, y0=25.3, y1=33.27, z0=92.4, z1=96.0)
+# USB-C receptacle centre 1.6 mm behind the PCB's back face (measured). A standard
+# plug (12.4 x 6.5 overmold) then reaches 0.35 mm past the flange's outer face, so
+# the flange gets a matching relief from the ring wall out to its edge.
+USB_CENTRE_BEHIND_PCB = 1.6
+USB_PLUG = (12.4, 6.5)               # overmold width, height
+FLANGE_USB_RELIEF = dict(y0=33.2, y1=34.1, z0=92.4, z1=99.6)   # case coords; x as USB_NOTCH
+# ring (case) -> enclosure: flange holes (74.5 x 104.5, centre case x 31.89 z 44.48) sit on the
+# enclosure's cover pads (centre x -20.45 y 24.0), flange back (case y 35.26) on the pads (z 14)
+def case_to_enclosure(xc, yc, zc):
+    return zc - 64.93, 55.89 - xc, 49.26 - yc
 STANDOFF_D, STANDOFF_PILOT_D = 6.0, 2.5  # M3 self-tapper
 
 
@@ -95,6 +105,8 @@ def ring_v2():
     filled = ring.Volume() - before
     n = USB_NOTCH
     ring = ring.cut(box(n["cx"] - n["w"] / 2, n["cx"] + n["w"] / 2, n["y0"], n["y1"], n["z0"], n["z1"]))
+    f = FLANGE_USB_RELIEF
+    ring = ring.cut(box(n["cx"] - n["w"] / 2, n["cx"] + n["w"] / 2, f["y0"], f["y1"], f["z0"], f["z1"]))
     edge_l, edge_r = 31.7 - CYD_W / 2 - BOSS_CLEARANCE, 31.7 + CYD_W / 2 + BOSS_CLEARANCE
     for z0, z1 in BOSS_TRIM_Z:
         ring = ring.cut(box(edge_l, edge_l + 1.5, *BOSS_TRIM_Y, z0, z1))
@@ -132,6 +144,16 @@ def cyd_standin():
     return pcb, glass
 
 
+def usb_plug_case():
+    """USB-C plug overmold stand-in (case coordinates), from the receptacle mouth outward."""
+    dx, dy, dz = BEZEL_TO_CASE
+    pcb_back_y = BEZEL_BACK_Y + CYD_STACK + CYD_PCB_T + dy          # case y
+    cy = pcb_back_y + USB_CENTRE_BEHIND_PCB
+    mouth_z = CYD_CZ + dz + cyd_model.PCB_W / 2 + cyd_model.USB_C[3]
+    w, h = USB_PLUG
+    return box(USB_NOTCH["cx"] - w / 2, USB_NOTCH["cx"] + w / 2, cy - h / 2, cy + h / 2, mouth_z, mouth_z + 30)
+
+
 def cyd_in_bezel():
     """cyd_model parts placed in bezel coordinates: model +X (USB-C) -> +z (ring's
     notch end), model +Z (out of the screen) -> -y (toward the bezel front), and
@@ -166,6 +188,12 @@ def main():
         print("  %-20s vs ring %6.2f, vs bezel %6.2f" % (
             name, solid.intersect(case_in_bezel).Volume(), solid.intersect(bez).Volume()))
     print("  bezel vs ring %.2f (the original pair has the same 0.47: lip fit)" % bez.intersect(case_in_bezel).Volume())
+    plug = usb_plug_case()
+    pb = plug.BoundingBox()
+    e0 = case_to_enclosure(pb.xmax, pb.ymax, pb.zmin)
+    e1 = case_to_enclosure(pb.xmin, pb.ymin, pb.zmax)
+    print("  USB-C plug vs ring %.2f; plug in enclosure coords x %.2f..%.2f y %.2f..%.2f z %.2f..%.2f" % (
+        plug.intersect(ring).Volume(), e0[0], e1[0], e0[1], e1[1], e0[2], e1[2]))
     asm = cq.Assembly()
     asm.add(case_in_bezel, name="ring_v2", color=cq.Color(0.6, 0.7, 0.9))
     asm.add(bez, name="bezel_v2", color=cq.Color(0.95, 0.7, 0.4))
