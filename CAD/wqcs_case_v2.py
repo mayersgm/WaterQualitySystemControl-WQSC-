@@ -32,6 +32,11 @@ Rebuilds from the Fusion export WQCS_Enclosure_v1.step (no feature history):
      floor-level slot (HARNESS_SLOT, ~253 mm^2, < 40 % fill so plugs pull
      through) goes through the wall shared with the mechanical section,
      centred under the board. The old high slot on the left stays as a spare.
+  1d. Speaker (2026-10-22, 20 x 5 mm): press-fit housing on the display
+     section's upper left wall, above the main PCB: a short cylinder on the
+     inner wall face, split into SPK_FINGERS flexible fingers, each with an
+     inward lip (entry chamfered) that holds the speaker's back edge, and
+     sound slits through the wall behind the cone.
   1c. Fit check (review only): enclosure + the real main PCB (wqcs_pcb.step,
      placed on its floor standoffs as installed) + TDS stand-in boards, with
      clash volumes printed.
@@ -78,6 +83,18 @@ TDS_MOUNTS = (
     ("TDS-1", 64.0, -1, -24.0, -2.5),    # top wall, centred
     ("TDS-2", -16.0, +1, -24.0, -2.5),   # bottom wall, above the harness slot
 )   # z -18.5..13.5: >= 7 mm above every main-PCB edge part, below the cover pads (z 14 after FRONT_LIFT)
+
+# ---- speaker housing (left wall of the display section; wall x -77.5..-75.5) ----
+SPK_WALL_X = -75.45        # inner face of the left wall (measured; not -75.5)
+SPK_CY, SPK_CZ = 40.0, -3.0  # upper left, above the main PCB, below the display (z >= 13.5)
+SPK_D, SPK_H = 20.0, 5.0     # measured speaker
+SPK_FIT = 0.2                # ID = SPK_D + SPK_FIT
+SPK_WALL = 1.2
+SPK_EMBED = 0.3
+SPK_LIP = 0.7                # inward lip at the open end (radial)
+SPK_LIP_T = 1.0              # lip thickness (along x); entry chamfer over 80 %
+SPK_FINGERS, SPK_SLOT_W, SPK_SLOT_DEPTH = 6, 1.5, 4.5
+SPK_GRILLE_R, SPK_GRILLE_W, SPK_GRILLE_PITCH = 8.0, 1.6, 3.2   # slits through the wall
 
 # ---- main PCB (CAD/wqcs_pcb.step), as installed (photo IMG_6380) -------------
 PCB_STEP = os.path.join(HERE, "wqcs_pcb.step")
@@ -164,6 +181,43 @@ def remove_old_tds1_rails(enclosure):
     if len(rails.Solids()) != 2:
         raise RuntimeError("expected the 2 old TDS-1 rails, found %d solids" % len(rails.Solids()))
     return enclosure.cut(region).clean().fix(), rails.Volume()
+
+
+def speaker_housing():
+    """Cup on the wall with snap fingers; returns (housing, grille_cutter)."""
+    import math
+    rid = (SPK_D + SPK_FIT) / 2
+    x_open = SPK_WALL_X + SPK_H + SPK_LIP_T
+    centre = cq.Vector(SPK_WALL_X, SPK_CY, SPK_CZ)
+    xdir = cq.Vector(1, 0, 0)
+    # tube base sunk SPK_EMBED into the wall so it fuses (flush faces only touch)
+    base = cq.Vector(SPK_WALL_X - SPK_EMBED, SPK_CY, SPK_CZ)
+    tube = (cq.Solid.makeCylinder(rid + SPK_WALL, SPK_H + SPK_LIP_T + SPK_EMBED, base, xdir)
+            .cut(cq.Solid.makeCylinder(rid, SPK_H + SPK_LIP_T + SPK_EMBED + 0.01, base, xdir)))
+    lip_at = cq.Vector(SPK_WALL_X + SPK_H, SPK_CY, SPK_CZ)
+    lip = (cq.Solid.makeCylinder(rid + 0.01, SPK_LIP_T, lip_at, xdir)
+           .cut(cq.Solid.makeCylinder(rid - SPK_LIP, SPK_LIP_T + 0.01, lip_at, xdir)))
+    # entry chamfer: cone from the full bore at the open end down to the lip bore
+    lip = lip.cut(cq.Solid.makeCone(rid + 0.01, rid - SPK_LIP, SPK_LIP_T * 0.8,
+                                    cq.Vector(x_open, SPK_CY, SPK_CZ), cq.Vector(-1, 0, 0)))
+    housing = tube.fuse(lip)
+    for i in range(SPK_FINGERS):
+        a = 360.0 * i / SPK_FINGERS
+        slot = cq.Solid.makeBox(SPK_SLOT_DEPTH + 1, SPK_WALL + 2, SPK_SLOT_W,
+                                cq.Vector(x_open - SPK_SLOT_DEPTH, SPK_CY + rid - SPK_LIP - 0.5,
+                                          SPK_CZ - SPK_SLOT_W / 2))
+        housing = housing.cut(slot.rotate(centre, centre + xdir, a))
+    grille = None
+    n = int(SPK_GRILLE_R // SPK_GRILLE_PITCH)
+    for k in range(-n, n + 1):
+        dz = k * SPK_GRILLE_PITCH
+        half = math.sqrt(max(SPK_GRILLE_R ** 2 - dz ** 2, 0))
+        if half < 2:
+            continue
+        slit = cq.Solid.makeBox(3.0, 2 * half, SPK_GRILLE_W,
+                                cq.Vector(SPK_WALL_X - 2.5, SPK_CY - half, SPK_CZ + dz - SPK_GRILLE_W / 2))
+        grille = slit if grille is None else grille.fuse(slit)
+    return housing.clean(), grille
 
 
 def tds_rails(wall_y, inward, cx, cz):
@@ -273,6 +327,11 @@ def main():
         v2 = v2.clean().fix()
         print("added %s rails on the wall at y %.0f (+%.1f mm^3), valid=%s, solids=%d" % (
             name, wall_y, v2.Volume() - before, v2.isValid(), len(v2.Solids())))
+    housing, grille = speaker_housing()
+    before = v2.Volume()
+    v2 = v2.fuse(housing).cut(grille).clean().fix()
+    print("speaker housing at y %.0f z %.0f on the left wall (+%.1f mm^3 net), valid=%s, solids=%d" % (
+        SPK_CY, SPK_CZ, v2.Volume() - before, v2.isValid(), len(v2.Solids())))
     boards = tds_standins()
     board, parts = main_pcb()
     print("fit check (mm^3 of overlap; TDS boxes include a %.0f mm part zone):" % TDS_PART_H)
@@ -283,12 +342,17 @@ def main():
             b.intersect(v2).Volume(), b.intersect(parts).Volume(), b.intersect(board).Volume()))
     print("  main PCB parts vs enclosure %.2f, board vs enclosure %.2f" % (
         parts.intersect(v2).Volume(), board.intersect(v2).Volume()))
+    spk = cq.Solid.makeCylinder(SPK_D / 2, SPK_H, cq.Vector(SPK_WALL_X, SPK_CY, SPK_CZ), cq.Vector(1, 0, 0))
+    print("  speaker (in place) vs enclosure %.2f, vs PCB parts %.2f, vs TDS %s" % (
+        spk.intersect(v2).Volume(), spk.intersect(parts).Volume(),
+        ["%.2f" % spk.intersect(b).Volume() for b in boards]))
     fit = cq.Assembly()
     fit.add(v2, name="enclosure_v2", color=cq.Color(0.6, 0.7, 0.9))
     fit.add(board, name="main_pcb", color=cq.Color(0.8, 0.2, 0.2))
     fit.add(parts, name="main_pcb_parts", color=cq.Color(0.2, 0.2, 0.2))
     for (name, *_), b in zip(TDS_MOUNTS, boards):
         fit.add(b, name=name.lower().replace("-", "") + "_standin", color=cq.Color(0.3, 0.6, 0.3))
+    fit.add(spk, name="speaker_standin", color=cq.Color(0.9, 0.3, 0.3))
     fit.export(os.path.join(HERE, "WQCS_v2_fit_check.step"))
     cq.exporters.export(cq.Workplane().add(v2), os.path.join(HERE, "WQCS_Enclosure_v2.step"))
     print("wrote WQCS_Enclosure_v2.step")

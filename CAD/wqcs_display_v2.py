@@ -49,8 +49,11 @@ CYD_STACK = 4.9                    # measured 4.8-5.0: PCB front surface to glas
 CYD_BACK_DEPTH = 7.0               # measured: back connectors 5 mm, 7 mm with the speaker plugged in
 CYD_GLASS = (54.6, 77.3)           # x, z: edges 4.7 mm inside the hole centres (drawing)
 ACTIVE = (48.6, 64.8)              # x, z
-CYD_ACTIVE_DZ = +2.6               # active-area centre from board centre along z
-                                   # (+ = toward the ring's top end, z+; flip sign to rotate the CYD 180 deg)
+# The user's board, seen from the front, is the drawing rotated 180 deg: RGB LED at
+# bottom-left, USB-C centred on the right edge. The active area is offset toward the
+# LED end (drawing: 17.1 mm from the FPC end, 11.6 from the LED end), i.e. away from
+# the USB. The USB end goes to the ring's z+ end (USB_NOTCH), so the offset is -z.
+CYD_ACTIVE_DZ = -2.6               # active-area centre from board centre along z
 WINDOW_MARGIN = 0.3                # per side, as on the v1 bezel (49.2 x 65.4 window)
 # board centre in bezel coordinates = ring cavity centre (case x 31.7, z 45.85)
 # shifted CYD_DZ toward the bottom end: the ring's top end has the old PyPortal USB
@@ -59,6 +62,9 @@ CYD_DZ = -0.6
 CYD_CX, CYD_CZ = 31.7 - BEZEL_TO_CASE[0], 45.85 - BEZEL_TO_CASE[2] + CYD_DZ
 
 OLD_WINDOW = (-24.6, 24.6, 13.7, 79.1)   # x0, x1, z0, z1 (measured)
+# USB-C access through the ring's z+ end wall (case coordinates), centred on the
+# board's short axis, from just behind the bezel lip to the flange
+USB_NOTCH = dict(cx=31.7, w=14.0, y0=25.3, y1=33.27, z0=92.4, z1=96.0)
 STANDOFF_D, STANDOFF_PILOT_D = 6.0, 2.5  # M3 self-tapper
 
 
@@ -85,6 +91,8 @@ def ring_v2():
     before = ring.Volume()
     ring = ring.fuse(box(*SWITCH_HOLE_FILL))
     filled = ring.Volume() - before
+    n = USB_NOTCH
+    ring = ring.cut(box(n["cx"] - n["w"] / 2, n["cx"] + n["w"] / 2, n["y0"], n["y1"], n["z0"], n["z1"]))
     edge_l, edge_r = 31.7 - CYD_W / 2 - BOSS_CLEARANCE, 31.7 + CYD_W / 2 + BOSS_CLEARANCE
     for z0, z1 in BOSS_TRIM_Z:
         ring = ring.cut(box(edge_l, edge_l + 1.5, *BOSS_TRIM_Y, z0, z1))
@@ -129,8 +137,8 @@ def main():
     cq.exporters.export(cq.Workplane().add(bez), os.path.join(HERE, "Display_Cover_v2.step"))
 
     ring, removed, filled = ring_v2()
-    print("ring v2 valid=%s: switch housing removed (%.1f mm^3), wall hole filled (+%.1f mm^3)" % (
-        ring.isValid(), removed, filled))
+    print("ring v2 valid=%s: switch housing removed (%.1f mm^3), wall hole filled (+%.1f mm^3), "
+          "USB-C notch %.0f mm wide at the z+ end" % (ring.isValid(), removed, filled, USB_NOTCH["w"]))
     cq.exporters.export(cq.Workplane().add(ring), os.path.join(HERE, "WQCS_Display_Case_v2.step"))
     dx, dy, dz = BEZEL_TO_CASE
     case_in_bezel = ring.translate(cq.Vector(-dx, -dy, -dz))
