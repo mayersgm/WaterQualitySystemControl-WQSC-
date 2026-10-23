@@ -37,6 +37,10 @@ Rebuilds from the Fusion export WQCS_Enclosure_v1.step (no feature history):
      inner wall face, split into SPK_FINGERS flexible fingers, each with an
      inward lip (entry chamfered) that holds the speaker's back edge, and
      sound slits through the wall behind the cone.
+  1e. Speaker test coupon: a 35 x 35 mm square of the left wall cut from the
+     finished enclosure, with the housing and grille, to test the press fit
+     without printing the whole box (Speaker_Test_Coupon.step / .stl; print it
+     wall-down, cup up).
   1c. Fit check (review only): enclosure + the real main PCB (wqcs_pcb.step,
      placed on its floor standoffs as installed) + TDS stand-in boards, with
      clash volumes printed.
@@ -95,6 +99,8 @@ SPK_LIP = 0.7                # inward lip at the open end (radial)
 SPK_LIP_T = 1.0              # lip thickness (along x); entry chamfer over 80 %
 SPK_FINGERS, SPK_SLOT_W, SPK_SLOT_DEPTH = 6, 1.5, 4.5
 SPK_GRILLE_R, SPK_GRILLE_W, SPK_GRILLE_PITCH = 8.0, 1.6, 3.2   # slits through the wall
+COUPON = 35.0                # test coupon side (mm)
+WALL_OUTER_X = -77.5         # left wall outer face (2 mm wall)
 
 # ---- main PCB (CAD/wqcs_pcb.step), as installed (photo IMG_6380) -------------
 PCB_STEP = os.path.join(HERE, "wqcs_pcb.step")
@@ -332,6 +338,16 @@ def main():
     v2 = v2.fuse(housing).cut(grille).clean().fix()
     print("speaker housing at y %.0f z %.0f on the left wall (+%.1f mm^3 net), valid=%s, solids=%d" % (
         SPK_CY, SPK_CZ, v2.Volume() - before, v2.isValid(), len(v2.Solids())))
+    # speaker test coupon: the same geometry, cut out of the finished enclosure
+    h = COUPON / 2
+    coupon = v2.intersect(cq.Solid.makeBox(SPK_WALL_X + SPK_H + SPK_LIP_T + 1 - WALL_OUTER_X, COUPON, COUPON,
+                                           cq.Vector(WALL_OUTER_X, SPK_CY - h, SPK_CZ - h))).clean()
+    cb = coupon.BoundingBox()
+    print("speaker coupon: %d solid, %.1f x %.1f x %.1f mm, %.1f cm^3, valid=%s" % (
+        len(coupon.Solids()), cb.ylen, cb.zlen, cb.xlen, coupon.Volume() / 1000, coupon.isValid()))
+    cq.exporters.export(cq.Workplane().add(coupon), os.path.join(HERE, "Speaker_Test_Coupon.step"))
+    cq.exporters.export(cq.Workplane().add(coupon), os.path.join(HERE, "Speaker_Test_Coupon.stl"),
+                        tolerance=0.02, angularTolerance=0.1)
     boards = tds_standins()
     board, parts = main_pcb()
     print("fit check (mm^3 of overlap; TDS boxes include a %.0f mm part zone):" % TDS_PART_H)
