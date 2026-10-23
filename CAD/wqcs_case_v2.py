@@ -92,12 +92,12 @@ TDS_MOUNTS = (
 SPK_WALL_X = -75.45        # inner face of the left wall (measured; not -75.5)
 SPK_CY, SPK_CZ = 40.0, -3.0  # upper left, above the main PCB, below the display (z >= 13.5)
 SPK_D, SPK_H = 20.0, 5.0     # measured speaker
-SPK_FIT = 0.2                # ID = SPK_D + SPK_FIT
-SPK_WALL = 1.2
+SPK_FIT = 0.4                # ID = SPK_D + SPK_FIT (0.2 printed too tight, 2026-10-22)
+SPK_WALL = 1.0               # finger thickness (1.2 too stiff)
 SPK_EMBED = 0.3
-SPK_LIP = 0.7                # inward lip at the open end (radial)
+SPK_LIP = 0.45               # inward lip at the open end (radial; 0.7 wouldn't pass)
 SPK_LIP_T = 1.0              # lip thickness (along x); entry chamfer over 80 %
-SPK_FINGERS, SPK_SLOT_W, SPK_SLOT_DEPTH = 6, 1.5, 4.5
+SPK_FINGERS, SPK_SLOT_W, SPK_SLOT_DEPTH = 6, 1.5, 5.5   # longer slits = more flexible fingers
 SPK_GRILLE_R, SPK_GRILLE_W, SPK_GRILLE_PITCH = 8.0, 1.6, 3.2   # slits through the wall
 COUPON = 35.0                # test coupon side (mm)
 
