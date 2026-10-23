@@ -5,7 +5,13 @@ Inputs (Fusion exports): WQCS_Display_Case_v1.step (open ring 71 x 99 x 11 mm
 with a flange that seats on the display section's cover pads) and
 Display_Cover.step (front bezel with a locating lip that drops into the ring).
 
-The ring needs no change: its cavity is 68.2 x 96.3 mm, and the CYD board
+Ring v2 (2026-10-22): the PyPortal's reset-switch housing (8.5 x 8.5 x 4.5 mm
+block on the inner left wall) is cut away and its 6 x 6 mm wall hole filled
+flush; neither is needed for the CYD. The four corner screw bosses (bezel
+screws) are trimmed on their inner face, behind the board's depth only, to
+BOSS_CLEARANCE from the CYD board's long edges: with the measured 4.9 mm
+stack the board sits deep enough to catch them. Otherwise the ring is unchanged: its
+cavity is 68.2 x 96.3 mm, and the CYD board
 (93.7 x 55, long axis along the ring's long axis) clears it by ~1.3 mm at
 the ends and the old PyPortal corner posts by ~0.7 mm. The bezel changes:
   - window: same size (both are 3.2" 320x240 panels: 48.6 x 64.8 active),
@@ -15,7 +21,7 @@ the ends and the old PyPortal corner posts by ~0.7 mm. The bezel changes:
     CYD_STACK long so the glass sits against the bezel's back (the old
     PyPortal sat the same 4 mm behind it). M3 screws from the CYD's back.
 
-Outputs: Display_Cover_v2.step; Display_v2_fit_check.step (ring + bezel +
+Outputs: Display_Cover_v2.step, WQCS_Display_Case_v2.step; Display_v2_fit_check.step (ring + bezel +
 CYD stand-in, review only, gitignored). Clash volumes are printed.
 
 Run:  ~/venvs/cad/bin/python CAD/wqcs_display_v2.py
@@ -39,8 +45,8 @@ BEZEL_FRONT_Y, BEZEL_BACK_Y = -2.5, -1.0
 CYD_W, CYD_L = 55.0, 93.7          # board: short side along x, long side along z
 CYD_HOLES = (48.0, 86.7)           # x, z
 CYD_PCB_T = 1.6
-CYD_STACK = 4.0                    # ** measure **: PCB front surface to glass front
-CYD_BACK_DEPTH = 6.0               # ** measure **: PCB back to tallest part
+CYD_STACK = 4.9                    # measured 4.8-5.0: PCB front surface to glass front
+CYD_BACK_DEPTH = 7.0               # measured: back connectors 5 mm, 7 mm with the speaker plugged in
 CYD_GLASS = (54.6, 77.3)           # x, z: edges 4.7 mm inside the hole centres (drawing)
 ACTIVE = (48.6, 64.8)              # x, z
 CYD_ACTIVE_DZ = +2.6               # active-area centre from board centre along z
@@ -58,6 +64,32 @@ STANDOFF_D, STANDOFF_PILOT_D = 6.0, 2.5  # M3 self-tapper
 
 def box(x0, x1, y0, y1, z0, z1):
     return cq.Solid.makeBox(x1 - x0, y1 - y0, z1 - z0, cq.Vector(x0, y0, z0))
+
+
+# PyPortal reset-switch housing (case coordinates): block on the inner face of
+# the left wall, and the switch opening through the wall (x -3.91..-2.41)
+SWITCH_BLOCK = (-2.42, 2.12, 25.70, 34.30, 43.95, 52.55)   # x0, x1, y0, y1, z0, z1
+SWITCH_HOLE_FILL = (-3.91, -2.41, 26.20, 31.85, 45.20, 51.30)
+# corner boss trims (case coordinates): bosses reach x 4.6 / 58.8 (top) and
+# 4.1 / 59.3 (bottom); the CYD's long edges are at x 31.7 -/+ 27.5
+BOSS_CLEARANCE = 0.5
+BOSS_TRIM_Y = (28.0, 33.27)          # behind the board's front; the flange (y >= 33.27) is untouched
+BOSS_TRIM_Z = ((-2.5, 10.5), (85.3, 94.2))
+
+
+def ring_v2():
+    ring = cq.importers.importStep(CASE).val()
+    block = box(*SWITCH_BLOCK)
+    removed = ring.intersect(block).Volume()
+    ring = ring.cut(block)
+    before = ring.Volume()
+    ring = ring.fuse(box(*SWITCH_HOLE_FILL))
+    filled = ring.Volume() - before
+    edge_l, edge_r = 31.7 - CYD_W / 2 - BOSS_CLEARANCE, 31.7 + CYD_W / 2 + BOSS_CLEARANCE
+    for z0, z1 in BOSS_TRIM_Z:
+        ring = ring.cut(box(edge_l, edge_l + 1.5, *BOSS_TRIM_Y, z0, z1))
+        ring = ring.cut(box(edge_r - 1.5, edge_r, *BOSS_TRIM_Y, z0, z1))
+    return ring.clean().fix(), removed, filled
 
 
 def bezel_v2():
@@ -96,8 +128,12 @@ def main():
         bez.isValid(), ww, wl, acx, acz, (OLD_WINDOW[2] + OLD_WINDOW[3]) / 2))
     cq.exporters.export(cq.Workplane().add(bez), os.path.join(HERE, "Display_Cover_v2.step"))
 
+    ring, removed, filled = ring_v2()
+    print("ring v2 valid=%s: switch housing removed (%.1f mm^3), wall hole filled (+%.1f mm^3)" % (
+        ring.isValid(), removed, filled))
+    cq.exporters.export(cq.Workplane().add(ring), os.path.join(HERE, "WQCS_Display_Case_v2.step"))
     dx, dy, dz = BEZEL_TO_CASE
-    case_in_bezel = cq.importers.importStep(CASE).val().translate(cq.Vector(-dx, -dy, -dz))
+    case_in_bezel = ring.translate(cq.Vector(-dx, -dy, -dz))
     pcb, glass = cyd_standin()
     print("fit (mm^3 of overlap):")
     print("  CYD board+back vs ring %.2f, vs bezel %.2f" % (pcb.intersect(case_in_bezel).Volume(),
@@ -106,12 +142,12 @@ def main():
                                                      glass.intersect(bez).Volume()))
     print("  bezel vs ring %.2f" % bez.intersect(case_in_bezel).Volume())
     asm = cq.Assembly()
-    asm.add(case_in_bezel, name="ring_v1", color=cq.Color(0.6, 0.7, 0.9))
+    asm.add(case_in_bezel, name="ring_v2", color=cq.Color(0.6, 0.7, 0.9))
     asm.add(bez, name="bezel_v2", color=cq.Color(0.95, 0.7, 0.4))
     asm.add(pcb, name="cyd_pcb_standin", color=cq.Color(0.9, 0.8, 0.2))
     asm.add(glass, name="cyd_glass_standin", color=cq.Color(0.2, 0.2, 0.2))
     asm.export(os.path.join(HERE, "Display_v2_fit_check.step"))
-    print("wrote Display_Cover_v2.step, Display_v2_fit_check.step")
+    print("wrote Display_Cover_v2.step, WQCS_Display_Case_v2.step, Display_v2_fit_check.step")
 
 
 if __name__ == "__main__":
