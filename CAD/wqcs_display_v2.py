@@ -22,7 +22,7 @@ the ends and the old PyPortal corner posts by ~0.7 mm. The bezel changes:
     PyPortal sat the same 4 mm behind it). M3 screws from the CYD's back.
 
 Outputs: Display_Cover_v2.step, WQCS_Display_Case_v2.step; Display_v2_fit_check.step (ring + bezel +
-CYD stand-in, review only, gitignored). Clash volumes are printed.
+the CYD model from cyd_model.py, review only, gitignored). Clash volumes are printed per CYD part.
 
 Run:  ~/venvs/cad/bin/python CAD/wqcs_display_v2.py
 Bezel coordinates: x across the short side, z along the long side, y through
@@ -31,6 +31,8 @@ the bezel (front face y -2.5, back face y -1.0, lip to y 2.0; +y = into the box)
 import os
 
 import cadquery as cq
+
+import cyd_model
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CASE = os.path.join(HERE, "WQCS_Display_Case_v1.step")
@@ -130,6 +132,19 @@ def cyd_standin():
     return pcb, glass
 
 
+def cyd_in_bezel():
+    """cyd_model parts placed in bezel coordinates: model +X (USB-C) -> +z (ring's
+    notch end), model +Z (out of the screen) -> -y (toward the bezel front), and
+    the glass front on the bezel's back face."""
+    t = (CYD_CX, BEZEL_BACK_Y + CYD_STACK + CYD_PCB_T, CYD_CZ)
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
+    from OCP.gp import gp_Trsf
+    trsf = gp_Trsf()   # rows: x_b = -Y + tx, y_b = -Z + ty, z_b = X + tz (a proper rotation, det +1)
+    trsf.SetValues(0, -1, 0, t[0], 0, 0, -1, t[1], 1, 0, 0, t[2])
+    return {name: cq.Shape.cast(BRepBuilderAPI_Transform(solid.wrapped, trsf, True).Shape())
+            for name, solid in cyd_model.board_parts().items()}
+
+
 def main():
     bez, (acx, acz, ww, wl) = bezel_v2()
     print("bezel v2 valid=%s; window %.1f x %.1f centred x %.2f z %.2f (old centre z %.2f)" % (
@@ -142,18 +157,20 @@ def main():
     cq.exporters.export(cq.Workplane().add(ring), os.path.join(HERE, "WQCS_Display_Case_v2.step"))
     dx, dy, dz = BEZEL_TO_CASE
     case_in_bezel = ring.translate(cq.Vector(-dx, -dy, -dz))
-    pcb, glass = cyd_standin()
-    print("fit (mm^3 of overlap):")
-    print("  CYD board+back vs ring %.2f, vs bezel %.2f" % (pcb.intersect(case_in_bezel).Volume(),
-                                                         pcb.intersect(bez).Volume()))
-    print("  CYD glass vs ring %.2f, vs bezel %.2f" % (glass.intersect(case_in_bezel).Volume(),
-                                                     glass.intersect(bez).Volume()))
-    print("  bezel vs ring %.2f" % bez.intersect(case_in_bezel).Volume())
+    cyd = cyd_in_bezel()
+    a = cyd["active_area"].BoundingBox()
+    print("CYD model active area centre x %.2f z %.2f vs window centre x %.2f z %.2f; glass front y %.2f (bezel back %.2f)" % (
+        a.center.x, a.center.z, acx, acz, cyd["glass"].BoundingBox().ymin, BEZEL_BACK_Y))
+    print("fit (mm^3 of overlap) per CYD part:")
+    for name, solid in cyd.items():
+        print("  %-20s vs ring %6.2f, vs bezel %6.2f" % (
+            name, solid.intersect(case_in_bezel).Volume(), solid.intersect(bez).Volume()))
+    print("  bezel vs ring %.2f (the original pair has the same 0.47: lip fit)" % bez.intersect(case_in_bezel).Volume())
     asm = cq.Assembly()
     asm.add(case_in_bezel, name="ring_v2", color=cq.Color(0.6, 0.7, 0.9))
     asm.add(bez, name="bezel_v2", color=cq.Color(0.95, 0.7, 0.4))
-    asm.add(pcb, name="cyd_pcb_standin", color=cq.Color(0.9, 0.8, 0.2))
-    asm.add(glass, name="cyd_glass_standin", color=cq.Color(0.2, 0.2, 0.2))
+    for name, solid in cyd.items():
+        asm.add(solid, name="cyd_" + name, color=cq.Color(*cyd_model.COLORS[name]))
     asm.export(os.path.join(HERE, "Display_v2_fit_check.step"))
     print("wrote Display_Cover_v2.step, WQCS_Display_Case_v2.step, Display_v2_fit_check.step")
 
