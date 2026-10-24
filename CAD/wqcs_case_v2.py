@@ -106,7 +106,7 @@ COUPON = 35.0                # test coupon side (mm)
 # top (rim z 16.5) with its underside at z ~15.64 (wqcs_display_v2.py prints the
 # plug position), so the rim gets a notch there.
 USB_RIM_NOTCH = (34.3, 40.0, 24.2 - 7.2, 24.2 + 7.2, 15.0, 16.6)   # x0, x1, y0, y1, z0, z1
-USB_PLUG_ENCL = (27.75, 60.0, 17.99, 30.39, 15.64, 22.14)          # from wqcs_display_v2.py
+USB_PLUG_ENCL = (27.75, 60.0, 17.99, 30.39, 16.24, 22.74)          # from wqcs_display_v2.py (stack 4.3)
 WALL_OUTER_X = -77.5         # left wall outer face (2 mm wall)
 
 # ---- main PCB (CAD/wqcs_pcb.step), as installed (photo IMG_6380) -------------

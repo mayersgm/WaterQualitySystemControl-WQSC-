@@ -25,7 +25,8 @@ HOLE_D = 3.2
 GLASS = (77.3, 54.6)                          # edges 4.7 mm inside the hole centres (drawing)
 ACTIVE = (64.8, 48.6)                         # spec sheet
 ACTIVE_DX = -2.6                              # toward the LED end (left in this frame)
-STACK = 4.9                                   # measured 4.8-5.0: PCB front to glass front
+STACK = 4.3                                   # PCB front to glass front: 4.8-5.0 by caliper, but
+                                              # the bezel test print showed ~4.3 (2026-10-24)
 BACK = 5.0                                    # measured: back connectors
 BACK_SPEAKER = 7.0                            # measured: with the speaker plugged in
 BACK_MARGIN = 4.0                             # envelope keeps clear of the hole margins

@@ -47,7 +47,8 @@ BEZEL_FRONT_Y, BEZEL_BACK_Y = -2.5, -1.0
 CYD_W, CYD_L = 55.0, 93.7          # board: short side along x, long side along z
 CYD_HOLES = (48.0, 86.7)           # x, z
 CYD_PCB_T = 1.6
-CYD_STACK = 4.9                    # measured 4.8-5.0: PCB front surface to glass front
+CYD_STACK = 4.3                    # 4.9 (caliper) left a 0.5-0.7 mm gap at the glass on the
+                                   # test print (2026-10-24), so the real stack is ~4.3
 CYD_BACK_DEPTH = 7.0               # measured: back connectors 5 mm, 7 mm with the speaker plugged in
 CYD_GLASS = (54.6, 77.3)           # x, z: edges 4.7 mm inside the hole centres (drawing)
 ACTIVE = (48.6, 64.8)              # x, z
@@ -64,6 +65,12 @@ CYD_DZ = -0.6
 CYD_CX, CYD_CZ = 31.7 - BEZEL_TO_CASE[0], 45.85 - BEZEL_TO_CASE[2] + CYD_DZ
 
 OLD_WINDOW = (-24.6, 24.6, 13.7, 79.1)   # x0, x1, z0, z1 (measured)
+# The v1 window has a 1 mm x 45 deg chamfer on its front edge (front-face opening
+# x -25.3..25.3, z 12.99..79.79) and r1 back corners. The fill must cover the whole
+# chamfered opening: filling only the back opening left a V-gap at the front, and
+# the strip printed detached (2026-10-24).
+OLD_WINDOW_FRONT = (-25.3, 25.3, 12.99, 79.79)
+WINDOW_CHAMFER, WINDOW_CORNER_R = 1.0, 1.0   # match v1
 # USB-C access through the ring's z+ end wall (case coordinates), centred on the
 # board's short axis, from just behind the bezel lip to the flange
 USB_NOTCH = dict(cx=31.7, w=14.0, y0=25.3, y1=33.27, z0=92.4, z1=96.0)
@@ -114,14 +121,31 @@ def ring_v2():
     return ring.clean().fix(), removed, filled
 
 
+def _rrect_wire(cx, cz, w, l, r, y):
+    """Rounded rectangle in the plane y = const (XZ plane: local x = X, local y = Z)."""
+    wire = cq.Workplane("XZ", origin=(0, y, 0)).center(cx, cz).rect(w, l).val()
+    return wire.fillet2D(r, wire.Vertices())
+
+
+def window_cutter(cx, cz, w, l):
+    """Straight r1 opening at the back plus a 45 deg front chamfer, like the v1 window."""
+    yc = BEZEL_FRONT_Y + WINDOW_CHAMFER          # where the chamfer meets the straight wall
+    straight = cq.Solid.makeLoft([_rrect_wire(cx, cz, w, l, WINDOW_CORNER_R, yc - 0.01),
+                                  _rrect_wire(cx, cz, w, l, WINDOW_CORNER_R, BEZEL_BACK_Y + 0.3)])
+    c = WINDOW_CHAMFER
+    chamfer = cq.Solid.makeLoft([_rrect_wire(cx, cz, w + 2 * c + 0.02, l + 2 * c + 0.02,
+                                             WINDOW_CORNER_R + c, BEZEL_FRONT_Y - 0.01),
+                                 _rrect_wire(cx, cz, w, l, WINDOW_CORNER_R, yc)])
+    return straight.fuse(chamfer)
+
+
 def bezel_v2():
     bez = cq.importers.importStep(BEZEL).val()
-    x0, x1, z0, z1 = OLD_WINDOW
-    bez = bez.fuse(box(x0 - 0.1, x1 + 0.1, BEZEL_FRONT_Y, BEZEL_BACK_Y, z0 - 0.1, z1 + 0.1))
+    x0, x1, z0, z1 = OLD_WINDOW_FRONT
+    bez = bez.fuse(box(x0 - 0.3, x1 + 0.3, BEZEL_FRONT_Y, BEZEL_BACK_Y, z0 - 0.3, z1 + 0.3))
     ww, wl = ACTIVE[0] + 2 * WINDOW_MARGIN, ACTIVE[1] + 2 * WINDOW_MARGIN
     acx, acz = CYD_CX, CYD_CZ + CYD_ACTIVE_DZ
-    bez = bez.cut(box(acx - ww / 2, acx + ww / 2, BEZEL_FRONT_Y - 1, BEZEL_BACK_Y + 0.5,
-                      acz - wl / 2, acz + wl / 2))
+    bez = bez.cut(window_cutter(acx, acz, ww, wl))
     for sx in (-1, 1):
         for sz in (-1, 1):
             hx, hz = CYD_CX + sx * CYD_HOLES[0] / 2, CYD_CZ + sz * CYD_HOLES[1] / 2
