@@ -196,11 +196,15 @@ def main():
     print("bezel v2 valid=%s; window %.1f x %.1f centred x %.2f z %.2f (old centre z %.2f)" % (
         bez.isValid(), ww, wl, acx, acz, (OLD_WINDOW[2] + OLD_WINDOW[3]) / 2))
     cq.exporters.export(cq.Workplane().add(bez), os.path.join(HERE, "Display_Cover_v2.step"))
+    cq.exporters.export(cq.Workplane().add(bez), os.path.join(HERE, "Display_Cover_v2.stl"),
+                        tolerance=0.02, angularTolerance=0.1)
 
     ring, removed, filled = ring_v2()
     print("ring v2 valid=%s: switch housing removed (%.1f mm^3), wall hole filled (+%.1f mm^3), "
           "USB-C notch %.0f mm wide at the z+ end" % (ring.isValid(), removed, filled, USB_NOTCH["w"]))
     cq.exporters.export(cq.Workplane().add(ring), os.path.join(HERE, "WQCS_Display_Case_v2.step"))
+    cq.exporters.export(cq.Workplane().add(ring), os.path.join(HERE, "WQCS_Display_Case_v2.stl"),
+                        tolerance=0.02, angularTolerance=0.1)
     dx, dy, dz = BEZEL_TO_CASE
     case_in_bezel = ring.translate(cq.Vector(-dx, -dy, -dz))
     cyd = cyd_in_bezel()

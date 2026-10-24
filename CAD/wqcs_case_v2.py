@@ -384,7 +384,9 @@ def main():
     fit.add(spk, name="speaker_standin", color=cq.Color(0.9, 0.3, 0.3))
     fit.export(os.path.join(HERE, "WQCS_v2_fit_check.step"))
     cq.exporters.export(cq.Workplane().add(v2), os.path.join(HERE, "WQCS_Enclosure_v2.step"))
-    print("wrote WQCS_Enclosure_v2.step")
+    cq.exporters.export(cq.Workplane().add(v2), os.path.join(HERE, "WQCS_Enclosure_v2.stl"),
+                        tolerance=0.05, angularTolerance=0.1)
+    print("wrote WQCS_Enclosure_v2.step/.stl")
     if not BUILD_COVER:
         return
 
