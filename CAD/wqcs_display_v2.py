@@ -30,7 +30,7 @@ the CYD model from cyd_model.py, review only, gitignored). Clash volumes are pri
 
 Run:  ~/venvs/cad/bin/python CAD/wqcs_display_v2.py
 Bezel coordinates: x across the short side, z along the long side, y through
-the bezel (front face y -2.5, back face y -1.0, lip to y 2.0; +y = into the box).
+the bezel (front face y -4.0 (v1: -2.5), back face y -1.0, lip to y 2.0; +y = into the box).
 """
 import os
 
@@ -45,7 +45,10 @@ BEZEL = os.path.join(HERE, "Display_Cover.step")
 # bezel -> case placement, from the four shared dia-8 corner holes
 # (bezel (-31.791, 0.760) == case (0.095, 0.242)); bezel back face on the ring rim
 BEZEL_TO_CASE = (31.886, 22.27 + 1.0, -0.518)   # dx, dy, dz
-BEZEL_FRONT_Y, BEZEL_BACK_Y = -2.5, -1.0
+BEZEL_V1_FRONT_Y, BEZEL_BACK_Y = -2.5, -1.0
+BEZEL_THICKEN = 1.5      # front plate 1.5 -> 3 mm, grown forward (user, 2026-10-25); the back,
+                         # standoffs and lip are unchanged, so the glass seat and snap fit stay
+BEZEL_FRONT_Y = BEZEL_V1_FRONT_Y - BEZEL_THICKEN
 
 # ESP32-2432S032C (Sunton drawing). ** verify with calipers **
 CYD_W, CYD_L = 55.0, 93.7          # board: short side along x, long side along z
@@ -74,7 +77,9 @@ OLD_WINDOW = (-24.6, 24.6, 13.7, 79.1)   # x0, x1, z0, z1 (measured)
 # chamfered opening: filling only the back opening left a V-gap at the front, and
 # the strip printed detached (2026-10-24).
 OLD_WINDOW_FRONT = (-25.3, 25.3, 12.99, 79.79)
-WINDOW_CHAMFER, WINDOW_CORNER_R = 1.0, 1.0   # match v1
+# v1: 1.0 chamfer on a 1.5 plate. The chamfer grows with the plate so the straight
+# section stays 0.5 mm and the viewing angle doesn't change.
+WINDOW_CHAMFER, WINDOW_CORNER_R = 1.0 + BEZEL_THICKEN, 1.0
 # USB-C access through the ring's z+ end wall (case coordinates), centred on the
 # board's short axis, from just behind the bezel lip to the flange
 # The PyPortal's opening through the USB end wall (x 25.34..56.65, behind a thicker
@@ -172,7 +177,11 @@ def window_cutter(cx, cz, w, l):
 def bezel_v2():
     bez = cq.importers.importStep(BEZEL).val()
     x0, x1, z0, z1 = OLD_WINDOW_FRONT
-    bez = bez.fuse(box(x0 - 0.3, x1 + 0.3, BEZEL_FRONT_Y, BEZEL_BACK_Y, z0 - 0.3, z1 + 0.3))
+    bez = bez.fuse(box(x0 - 0.3, x1 + 0.3, BEZEL_V1_FRONT_Y, BEZEL_BACK_Y, z0 - 0.3, z1 + 0.3)).clean()
+    front = max((f for f in bez.Faces() if f.geomType() == "PLANE" and f.normalAt().y < -0.99
+                 and abs(f.Center().y - BEZEL_V1_FRONT_Y) < 1e-3), key=lambda f: f.Area())
+    plate = cq.Solid.extrudeLinear(cq.Face.makeFromWires(front.outerWire()), cq.Vector(0, -BEZEL_THICKEN, 0))
+    bez = bez.fuse(plate)
     ww, wl = ACTIVE[0] + 2 * WINDOW_MARGIN, ACTIVE[1] + 2 * WINDOW_MARGIN
     acx, acz = CYD_CX, CYD_CZ + CYD_ACTIVE_DZ
     bez = bez.cut(window_cutter(acx, acz, ww, wl))

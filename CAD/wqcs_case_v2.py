@@ -6,8 +6,25 @@ Rebuilds from the Fusion export WQCS_Enclosure_v1.step (no feature history):
      band of wall (z -0.5..6.0: constant cross-section, above the internal
      component holder, below the side cable glands), the top part is raised
      LIFT, and the gap is filled with that same profile. Walls, cross wall and
-     corner posts get longer; glands, rim and lid snap-fit move up together, so
-     the v1 lid still fits. The front (display / main-PCB) section is untouched.
+     corner posts get longer; rim and lid snap-fit move up together, so the v1
+     lid still fits. The dia-16 tube bulkhead holes are put back at their v1
+     positions (user, 2026-10-25: the internal holders don't move, so
+     the tube runs must line up). The front (display / main-PCB) section is untouched.
+  1c. Outer walls 2 -> 4 mm (user, 2026-10-25: forcing the tubing into place
+     flexed the 2 mm walls). Every outer side and end wall of both sections
+     grows WALL_ADD outward, so nothing inside moves. Each opening through a
+     straight wall is carried straight on through the new skin, so no hole
+     moves either. The step face where the mechanical section rises above the
+     display rim isn't an outer wall and stays 2 mm. The lid gets the same
+     border: WQCS_Encl_lid_v2 = v1 + WALL_ADD on its three outer edges.
+  1e. Bottom end and pressure switch (user, 2026-10-25). "Down" is -y, because
+     the unit hangs with the display section on top. The bottom end (the end
+     wall the refill solenoid screws to) drops BOTTOM_DROP: the mechanical
+     section is stretched at BOTTOM_SPLIT_Y, inside a plain band of wall, and
+     the lid gets the same stretch. The pressure-switch housing (the sleeve the
+     pressure switch's lower body drops into) is rebuilt with PSW_WALL walls instead of
+     1.0 mm, grown outward so the pocket is unchanged, and drops PSW_DROP into
+     the room this makes. The bulkhead holes are above the split, so they stay put.
   1a. Display/PCB section +FRONT_LIFT (2026-10-21, user: 48 -> ~58 mm inside):
      same method, split at FRONT_SPLIT_Z inside that section's plain wall band
      (z -15..-2). Rim, cover pads and their pilots, and corner-post tops move
@@ -70,6 +87,24 @@ SRC = os.path.join(HERE, "WQCS_Enclosure_v1.step")
 LIFT_Y0, LIFT_Y1 = -200.0, -20.0   # main body; the front section starts at y -20
 SPLIT_Z = 5.5        # band [SPLIT_Z - LIFT, SPLIT_Z] lies in the plain wall band z -0.5..6.0
 LIFT = 4.0           # +4 mm, lying horizontally with the display facing up
+# dia-16 bulkhead holes above SPLIT_Z, kept at their v1 positions:
+# (wall x0, x1, hole centre y, centre z in v1); plain 2 mm wall around both
+BULKHEAD_D = 16.0
+BULKHEADS = ((-80.511667, -78.511667, -117.0, 14.5), (37.488333, 39.488333, -145.0, 14.5))
+WALL_ADD = 2.0       # outer walls 2 -> 4 mm, grown outward
+WALL_PROBE = 0.3     # depth inside each outer face searched for openings
+LID_SRC = os.path.join(HERE, "WQCS_Encl_lid_v1.step")
+LID_PLATE_T = 3.0    # lid plate z 32.5..35.5 (v1 coordinates)
+# internal holders (below SPLIT_Z except the shelf's right half, which the lift stretched)
+BOTTOM_SPLIT_Y = -170.0    # band [split, split + BOTTOM_DROP] lies in a plain stretch (y -180..-156)
+BOTTOM_DROP = 5.0
+PSW_ZONE = (-45.6, 18.0, -126.0, -107.5, -41.5, -3.4)   # v1 housing, incl. its base fillets
+PSW_POCKET = (-43.31, 15.69, -123.65, -109.85)           # x0, x1, y0, y1 (unchanged)
+PSW_POCKET_R = 3.5         # pocket corners at the right end
+PSW_TOP = -3.5
+PSW_SLOT = (-119.19, -112.31, -30.6)                     # left end wall: y0, y1, from z up
+PSW_WALL = 3.0             # v1: 1.0
+PSW_DROP = 5.0
 FRONT_Y0 = -20.0     # display/PCB section: y -20 and beyond
 FRONT_SPLIT_Z = -3.0 # band [FRONT_SPLIT_Z - FRONT_LIFT, FRONT_SPLIT_Z] lies in its plain band z -15..-2
 FRONT_LIFT = 10.0    # inside height 48 -> 58 mm
@@ -107,7 +142,7 @@ COUPON = 35.0                # test coupon side (mm)
 # plug position), so the rim gets a notch there.
 USB_RIM_NOTCH = (34.3, 40.0, 24.2 - 7.2, 24.2 + 7.2, 15.0, 16.6)   # x0, x1, y0, y1, z0, z1
 USB_PLUG_ENCL = (27.75, 60.0, 17.99, 30.39, 16.24, 22.74)          # from wqcs_display_v2.py (stack 4.3)
-WALL_OUTER_X = -77.5         # left wall outer face (2 mm wall)
+WALL_OUTER_X = -77.5 - WALL_ADD   # display section left wall outer face
 
 # ---- main PCB (CAD/wqcs_pcb.step), as installed (photo IMG_6380) -------------
 PCB_STEP = os.path.join(HERE, "wqcs_pcb.step")
@@ -164,6 +199,102 @@ def lift_region(s, y0, y1, split_z, amount):
     rest = s.cut(box(y0, y1, split_z, 200))
     out = rest.fuse(band.translate(cq.Vector(0, 0, amount))).fuse(upper.translate(cq.Vector(0, 0, amount)))
     return out.clean().fix(), band   # fix(): boolean seams can leave tolerance flags
+
+
+def restore_bulkheads(s):
+    """Fill the lifted bulkhead holes (z + LIFT) and cut them again at the v1 z."""
+    pad = 1.0
+    for x0, x1, y, z in BULKHEADS:
+        r = BULKHEAD_D / 2
+        s = s.fuse(cq.Solid.makeBox(x1 - x0, BULKHEAD_D + 2 * pad, BULKHEAD_D + 2 * pad,
+                                    cq.Vector(x0, y - r - pad, z + LIFT - r - pad)))
+        s = s.cut(cq.Solid.makeCylinder(r, x1 - x0 + 2, cq.Vector(x0 - 1, y, z), cq.Vector(1, 0, 0)))
+    return s.clean().fix()
+
+
+def _box(x0, x1, y0, y1, z0, z1):
+    return cq.Solid.makeBox(x1 - x0, y1 - y0, z1 - z0, cq.Vector(x0, y0, z0))
+
+
+def stretch_bottom(s):
+    """Move everything below BOTTOM_SPLIT_Y down BOTTOM_DROP and fill the gap with
+    the plain cross-section just above the split."""
+    big, y0, d = 400.0, BOTTOM_SPLIT_Y, BOTTOM_DROP
+    lower = s.intersect(_box(-big, big, y0 - big, y0, -big, big))
+    band = s.intersect(_box(-big, big, y0, y0 + d, -big, big))
+    rest = s.cut(_box(-big, big, y0 - big, y0, -big, big))
+    out = rest.fuse(band.translate(cq.Vector(0, -d, 0))).fuse(lower.translate(cq.Vector(0, -d, 0)))
+    return out.clean().fix()
+
+
+def pressure_switch_housing():
+    """The pressure switch's sleeve: v1 pocket and left-end slot, PSW_WALL walls, sunk 0.1 into the floor."""
+    x0, x1, y0, y1 = PSW_POCKET
+    w, r, zf = PSW_WALL, PSW_POCKET_R, PSW_ZONE[4]
+    outer = _box(x0 - w, x1 + w, y0 - w, y1 + w, zf - 0.1, PSW_TOP)
+    pocket = _box(x0, x1 - r, y0, y1, zf, PSW_TOP + 1).fuse(_box(x1 - r, x1, y0 + r, y1 - r, zf, PSW_TOP + 1))
+    for yc in (y0 + r, y1 - r):
+        pocket = pocket.fuse(cq.Solid.makeCylinder(r, PSW_TOP + 1 - zf, cq.Vector(x1 - r, yc, zf)))
+    sy0, sy1, sz = PSW_SLOT
+    return outer.cut(pocket).cut(_box(x0 - w - 1, x0 + 0.1, sy0, sy1, sz, PSW_TOP + 1))
+
+
+def _plane_faces(s, normal, at, axis):
+    """Planar faces of s with the given normal lying in the plane axis == at."""
+    return [f for f in s.Faces() if f.geomType() == "PLANE" and f.normalAt().dot(normal) > 0.99
+            and abs(getattr(f.Center(), axis) - at) < 1e-3]
+
+
+def thicken_walls(s):
+    """Grow every outer side/end wall WALL_ADD outward, up to each section's rim,
+    and carry each opening through a straight wall on through the new skin."""
+    bb = s.BoundingBox()
+    floor = max(_plane_faces(s, cq.Vector(0, 0, -1), bb.zmin, "z"), key=lambda f: f.Area())
+    outline = floor.outerWire()
+    inner = cq.Face.makeFromWires(outline)
+    grown = cq.Face.makeFromWires(outline.offset2D(WALL_ADD, "intersection")[0])
+    up = cq.Vector(0, 0, bb.zlen)
+    skin = cq.Solid.extrudeLinear(grown, up).cut(cq.Solid.extrudeLinear(inner, up))
+    # the display section's walls stop at its rim; the mechanical section's run full height
+    mech_end = max(f.BoundingBox().ymax for f in _plane_faces(s, cq.Vector(-1, 0, 0), bb.xmin, "x"))
+    front_rim = RIM_Z_V1 + FRONT_LIFT
+    skin = skin.cut(cq.Solid.makeBox(400, 400, 100, cq.Vector(-200, mech_end, front_rim)))
+    slab = cq.Solid.extrudeLinear(inner, cq.Vector(0, 0, 1))
+    holes = 0
+    for e in outline.Edges():
+        if e.geomType() != "LINE":
+            continue
+        p0, p1 = e.startPoint(), e.endPoint()
+        d = (p1 - p0).normalized()
+        n = cq.Vector(d.y, -d.x, 0)
+        if slab.isInside(e.Center() + n * 0.5 + cq.Vector(0, 0, 0.5)):
+            n = -n                       # outward
+        assert abs(n.x) > 0.999 or abs(n.y) > 0.999, "outer walls are axis-aligned"
+        axis = "x" if abs(n.x) > 0.5 else "y"
+        face_at = getattr(e.Center(), axis)
+        probe_at = face_at - WALL_PROBE * (n.x if axis == "x" else n.y)
+        lo, hi = sorted((face_at, probe_at))
+        if axis == "x":
+            probe = cq.Solid.makeBox(hi - lo, abs(p1.y - p0.y), bb.zlen + 1, cq.Vector(lo, min(p0.y, p1.y), bb.zmin))
+        else:
+            probe = cq.Solid.makeBox(abs(p1.x - p0.x), hi - lo, bb.zlen + 1, cq.Vector(min(p0.x, p1.x), lo, bb.zmin))
+        void = probe.cut(s)
+        for f in _plane_faces(void, -n, probe_at, axis):
+            skin = skin.cut(cq.Solid.extrudeLinear(f, n * (WALL_PROBE + WALL_ADD + 0.2)))
+            holes += 1
+    return s.fuse(skin).clean().fix(), skin.Volume(), holes
+
+
+def lid_v2():
+    """The v1 lid with a WALL_ADD border on its three outer edges (not the y -20 edge
+    toward the display section), flush with the thickened walls."""
+    lid = stretch_bottom(cq.importers.importStep(LID_SRC).val())
+    bb = lid.BoundingBox()
+    top = max(_plane_faces(lid, cq.Vector(0, 0, 1), bb.zmax, "z"), key=lambda f: f.Area())
+    grown = cq.Face.makeFromWires(top.outerWire().offset2D(WALL_ADD, "intersection")[0])
+    border = cq.Solid.extrudeLinear(grown, cq.Vector(0, 0, -LID_PLATE_T))
+    border = border.cut(cq.Solid.makeBox(400, 50, 50, cq.Vector(-200, bb.ymax, bb.zmin - 10)))
+    return lid.fuse(border).clean().fix()
 
 
 def raise_standoffs(enclosure):
@@ -227,8 +358,8 @@ def speaker_housing():
         half = math.sqrt(max(SPK_GRILLE_R ** 2 - dz ** 2, 0))
         if half < 2:
             continue
-        slit = cq.Solid.makeBox(3.0, 2 * half, SPK_GRILLE_W,
-                                cq.Vector(SPK_WALL_X - 2.5, SPK_CY - half, SPK_CZ + dz - SPK_GRILLE_W / 2))
+        slit = cq.Solid.makeBox(SPK_WALL_X - WALL_OUTER_X + 1.0, 2 * half, SPK_GRILLE_W,
+                                cq.Vector(WALL_OUTER_X - 0.5, SPK_CY - half, SPK_CZ + dz - SPK_GRILLE_W / 2))
         grille = slit if grille is None else grille.fuse(slit)
     return housing.clean(), grille
 
@@ -316,6 +447,10 @@ def main():
     print("removed the old left-wall TDS-1 rails (%.1f mm^3)" % removed)
     v2, band = lift_region(v2, LIFT_Y0, LIFT_Y1, SPLIT_Z, LIFT)
     print("mechanical section +%.0f mm (band %.2f cm^3)" % (LIFT, band.Volume() / 1000))
+    before = v2.Volume()
+    v2 = restore_bulkheads(v2)
+    print("bulkhead holes back at v1 z (%+.1f mm^3, expect 0), valid=%s, solids=%d" % (
+        v2.Volume() - before, v2.isValid(), len(v2.Solids())))
     v2, band = lift_region(v2, FRONT_Y0, 200.0, FRONT_SPLIT_Z, FRONT_LIFT)
     print("display/PCB section +%.0f mm (band %.2f cm^3), inside height %.0f mm" % (
         FRONT_LIFT, band.Volume() / 1000, 48 + FRONT_LIFT))
@@ -324,6 +459,24 @@ def main():
     bb = v2.BoundingBox()
     print("enclosure v2 bbox: %.1f x %.1f x %.1f mm (z %.2f..%.2f)" % (
         bb.xlen, bb.ylen, bb.zlen, bb.zmin, bb.zmax))
+    v2 = stretch_bottom(v2)
+    print("bottom end down %.0f mm (split y %.0f), valid=%s, solids=%d" % (
+        BOTTOM_DROP, BOTTOM_SPLIT_Y, v2.isValid(), len(v2.Solids())))
+    psw = pressure_switch_housing().translate(cq.Vector(0, -PSW_DROP, 0))
+    v2 = v2.cut(_box(*PSW_ZONE)).fuse(psw).clean().fix()
+    pb = psw.BoundingBox()
+    print("pressure-switch housing: %.0f mm walls, down %.0f mm, outside x %.2f..%.2f y %.2f..%.2f, valid=%s, solids=%d" % (
+        PSW_WALL, PSW_DROP, pb.xmin, pb.xmax, pb.ymin, pb.ymax, v2.isValid(), len(v2.Solids())))
+    v2, skin, holes = thicken_walls(v2)
+    bb = v2.BoundingBox()
+    print("outer walls +%.0f mm outward (skin %.1f cm^3, %d openings carried through): %.1f x %.1f mm, valid=%s, solids=%d" % (
+        WALL_ADD, skin / 1000, holes, bb.xlen, bb.ylen, v2.isValid(), len(v2.Solids())))
+    lid = lid_v2()
+    lb = lid.BoundingBox()
+    print("lid v2: %.1f x %.1f mm, valid=%s, solids=%d" % (lb.xlen, lb.ylen, lid.isValid(), len(lid.Solids())))
+    cq.exporters.export(cq.Workplane().add(lid), os.path.join(HERE, "WQCS_Encl_lid_v2.step"))
+    cq.exporters.export(cq.Workplane().add(lid), os.path.join(HERE, "WQCS_Encl_lid_v2.stl"),
+                        tolerance=0.05, angularTolerance=0.1)
     if PCB_RAISE:
         before = v2.Volume()
         v2 = raise_standoffs(v2)
