@@ -10,7 +10,10 @@ block on the inner left wall) is cut away and its 6 x 6 mm wall hole filled
 flush; neither is needed for the CYD. The four corner screw bosses (bezel
 screws) are trimmed on their inner face, behind the board's depth only, to
 BOSS_CLEARANCE from the CYD board's long edges: with the measured 4.9 mm
-stack the board sits deep enough to catch them. Otherwise the ring is unchanged: its
+stack the board sits deep enough to catch them. The old PyPortal posts and their corner ledges, and the leftover tabs
+inside the USB end wall, are removed (the CYD hangs from the bezel; they only
+cost clearance and filament). The corner screw bosses (dia 8 with dia 5
+holes) are protected by OLD_POST_KEEP_D. Otherwise the ring is unchanged: its
 cavity is 68.2 x 96.3 mm, and the CYD board
 (93.7 x 55, long axis along the ring's long axis) clears it by ~1.3 mm at
 the ends and the old PyPortal corner posts by ~0.7 mm. The bezel changes:
@@ -97,6 +100,13 @@ SWITCH_BLOCK = (-2.42, 2.12, 25.70, 34.30, 43.95, 52.55)   # x0, x1, y0, y1, z0,
 SWITCH_HOLE_FILL = (-3.91, -2.41, 26.20, 31.85, 45.20, 51.30)
 # corner boss trims (case coordinates): bosses reach x 4.6 / 58.8 (top) and
 # 4.1 / 59.3 (bottom); the CYD's long edges are at x 31.7 -/+ 27.5
+# old PyPortal posts + ledges (case coords): cut inside the cavity, keeping the bosses
+BOSS_AXES = [(0.095, 0.242), (0.095, 91.502), (63.277, 0.242), (63.277, 91.502)]
+OLD_POST_KEEP_D = 8.4
+OLD_POST_CUTS = [(-2.39, 6.5, -2.29, 12.0), (57.0, 65.79, -2.29, 12.0),
+                 (-2.39, 6.5, 80.0, 93.99), (57.0, 65.79, 80.0, 93.99)]   # x0, x1, z0, z1
+OLD_POST_Y = (24.0, 33.26)          # behind the bezel lip seat, in front of the flange face
+USB_END_TABS = (26.0, 56.0, 26.27, 33.26, 92.0, 93.99)   # x0, x1, y0, y1, z0, z1
 BOSS_CLEARANCE = 0.5
 BOSS_TRIM_Y = (28.0, 33.27)          # behind the board's front; the flange (y >= 33.27) is untouched
 BOSS_TRIM_Z = ((-2.5, 10.5), (85.3, 94.2))
@@ -118,6 +128,14 @@ def ring_v2():
     for z0, z1 in BOSS_TRIM_Z:
         ring = ring.cut(box(edge_l, edge_l + 1.5, *BOSS_TRIM_Y, z0, z1))
         ring = ring.cut(box(edge_r - 1.5, edge_r, *BOSS_TRIM_Y, z0, z1))
+    keep = [cq.Solid.makeCylinder(OLD_POST_KEEP_D / 2, 20, cq.Vector(x, 20, z), cq.Vector(0, 1, 0))
+            for x, z in BOSS_AXES]
+    for x0, x1, z0, z1 in OLD_POST_CUTS:
+        cut = box(x0, x1, *OLD_POST_Y, z0, z1)
+        for k in keep:
+            cut = cut.cut(k)
+        ring = ring.cut(cut)
+    ring = ring.cut(box(*USB_END_TABS))
     return ring.clean().fix(), removed, filled
 
 
