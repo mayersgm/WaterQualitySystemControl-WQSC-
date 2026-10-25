@@ -77,6 +77,10 @@ OLD_WINDOW_FRONT = (-25.3, 25.3, 12.99, 79.79)
 WINDOW_CHAMFER, WINDOW_CORNER_R = 1.0, 1.0   # match v1
 # USB-C access through the ring's z+ end wall (case coordinates), centred on the
 # board's short axis, from just behind the bezel lip to the flange
+# The PyPortal's opening through the USB end wall (x 25.34..56.65, behind a thicker
+# inner layer with the D-shaped and SD-card cut-outs) is filled to a plain 1.5 mm
+# wall (user, 2026-10-24); only the USB-C notch below is cut back in.
+END_WALL_FILL = (25.0, 57.0, 24.4, 33.27, 94.0, 95.5)   # x0, x1, y0, y1, z0, z1 (case)
 USB_NOTCH = dict(cx=31.7, w=14.0, y0=25.3, y1=33.27, z0=92.4, z1=96.0)
 # USB-C receptacle centre 1.6 mm behind the PCB's back face (measured). A standard
 # plug (12.4 x 6.5 overmold) then reaches 0.35 mm past the flange's outer face, so
@@ -125,6 +129,7 @@ def ring_v2():
     before = ring.Volume()
     ring = ring.fuse(box(*SWITCH_HOLE_FILL))
     filled = ring.Volume() - before
+    ring = ring.fuse(box(*END_WALL_FILL))
     n = USB_NOTCH
     ring = ring.cut(box(n["cx"] - n["w"] / 2, n["cx"] + n["w"] / 2, n["y0"], n["y1"], n["z0"], n["z1"]))
     f = FLANGE_USB_RELIEF
