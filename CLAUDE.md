@@ -14,3 +14,6 @@ Full system breakdown (device roles, control flow, known bugs) is in [System_Ana
 
 ## Next planned step
 Enter plan mode to design a **hardware upgrade** for this system (replacing/augmenting current sensors: boiler limit switches, heater relay, reservoir float sensors, and re-enabling/redesigning cooling fan control — see "Notable Existing Issues" in `System_Analysis.md` for pain points to address, e.g. unrecoverable error-latch states, fragile level-constant encoding).
+
+## Session commands
+- `/checkpoint [% remaining] [next step]` — saves current position/decisions to memory, reports uncommitted git state, and returns a ready-to-paste `/compact keep: ...` line. User-level command, defined in `~/.claude/commands/checkpoint.md` (available in all projects).
