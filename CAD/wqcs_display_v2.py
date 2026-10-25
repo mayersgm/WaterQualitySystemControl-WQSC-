@@ -10,10 +10,11 @@ block on the inner left wall) is cut away and its 6 x 6 mm wall hole filled
 flush; neither is needed for the CYD. The four corner screw bosses (bezel
 screws) are trimmed on their inner face, behind the board's depth only, to
 BOSS_CLEARANCE from the CYD board's long edges: with the measured 4.9 mm
-stack the board sits deep enough to catch them. The old PyPortal posts and their corner ledges, and the leftover tabs
-inside the USB end wall, are removed (the CYD hangs from the bezel; they only
-cost clearance and filament). The corner screw bosses (dia 8 with dia 5
-holes) are protected by OLD_POST_KEEP_D. Otherwise the ring is unchanged: its
+stack the board sits deep enough to catch them. The old PyPortal posts, their corner ledges, the four corner bosses and the
+leftover tabs inside the USB end wall are removed: the CYD hangs from the
+bezel, and the bezel snaps on with the four long triangular ridges on the
+ring's inner front edge (user, 2026-10-24), which stay. Cuts are confined to
+the cavity, so the corner walls are untouched. Otherwise the ring is unchanged: its
 cavity is 68.2 x 96.3 mm, and the CYD board
 (93.7 x 55, long axis along the ring's long axis) clears it by ~1.3 mm at
 the ends and the old PyPortal corner posts by ~0.7 mm. The bezel changes:
@@ -102,6 +103,7 @@ SWITCH_HOLE_FILL = (-3.91, -2.41, 26.20, 31.85, 45.20, 51.30)
 # 4.1 / 59.3 (bottom); the CYD's long edges are at x 31.7 -/+ 27.5
 # old PyPortal posts + ledges (case coords): cut inside the cavity, keeping the bosses
 BOSS_AXES = [(0.095, 0.242), (0.095, 91.502), (63.277, 0.242), (63.277, 91.502)]
+KEEP_CORNER_BOSSES = False   # the bezel snaps on via the ridges; the bosses hold nothing
 OLD_POST_KEEP_D = 8.4
 OLD_POST_CUTS = [(-2.39, 6.5, -2.29, 12.0), (57.0, 65.79, -2.29, 12.0),
                  (-2.39, 6.5, 80.0, 93.99), (57.0, 65.79, 80.0, 93.99)]   # x0, x1, z0, z1
@@ -135,9 +137,10 @@ def ring_v2():
     keep = [cq.Solid.makeCylinder(OLD_POST_KEEP_D / 2, 31.77 - 20.0, cq.Vector(x, 20, z), cq.Vector(0, 1, 0))
             for x, z in BOSS_AXES]
     for x0, x1, z0, z1 in OLD_POST_CUTS:
-        cut = box(x0, x1, *OLD_POST_Y, z0, z1)
-        for k in keep:
-            cut = cut.cut(k)
+        cut = box(x0, x1, *OLD_POST_Y, z0, z1)   # inside the cavity only (walls untouched)
+        if KEEP_CORNER_BOSSES:
+            for k in keep:
+                cut = cut.cut(k)
         ring = ring.cut(cut)
     ring = ring.cut(box(*USB_END_TABS))
     return ring.clean().fix(), removed, filled
