@@ -105,8 +105,11 @@ BOSS_AXES = [(0.095, 0.242), (0.095, 91.502), (63.277, 0.242), (63.277, 91.502)]
 OLD_POST_KEEP_D = 8.4
 OLD_POST_CUTS = [(-2.39, 6.5, -2.29, 12.0), (57.0, 65.79, -2.29, 12.0),
                  (-2.39, 6.5, 80.0, 93.99), (57.0, 65.79, 80.0, 93.99)]   # x0, x1, z0, z1
-OLD_POST_Y = (24.0, 33.26)          # behind the bezel lip seat, in front of the flange face
-USB_END_TABS = (26.0, 56.0, 26.27, 33.26, 92.0, 93.99)   # x0, x1, y0, y1, z0, z1
+OLD_POST_Y = (22.26, 35.27)         # the full ring depth: the posts' front stubs and back ledge
+                                    # layer survived a mid-depth-only cut (print 2026-10-24)
+# USB end: the thickened strip behind the bezel-lip seat (the opposite end has only the seat,
+# y 22.33..25.21); trimmed to match
+USB_END_TABS = (7.0, 57.5, 25.3, 35.27, 92.4, 93.99)     # x0, x1, y0, y1, z0, z1
 BOSS_CLEARANCE = 0.5
 BOSS_TRIM_Y = (28.0, 33.27)          # behind the board's front; the flange (y >= 33.27) is untouched
 BOSS_TRIM_Z = ((-2.5, 10.5), (85.3, 94.2))
@@ -128,7 +131,8 @@ def ring_v2():
     for z0, z1 in BOSS_TRIM_Z:
         ring = ring.cut(box(edge_l, edge_l + 1.5, *BOSS_TRIM_Y, z0, z1))
         ring = ring.cut(box(edge_r - 1.5, edge_r, *BOSS_TRIM_Y, z0, z1))
-    keep = [cq.Solid.makeCylinder(OLD_POST_KEEP_D / 2, 20, cq.Vector(x, 20, z), cq.Vector(0, 1, 0))
+    # keep each boss exactly as long as the original (y 22.27..31.77), not the full ring depth
+    keep = [cq.Solid.makeCylinder(OLD_POST_KEEP_D / 2, 31.77 - 20.0, cq.Vector(x, 20, z), cq.Vector(0, 1, 0))
             for x, z in BOSS_AXES]
     for x0, x1, z0, z1 in OLD_POST_CUTS:
         cut = box(x0, x1, *OLD_POST_Y, z0, z1)
