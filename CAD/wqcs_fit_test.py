@@ -23,7 +23,7 @@ Push-fit elbows swivel, so E1/E2 are turned to whatever direction joins the two
 ports. Fittings are envelopes from typical John Guest 1/4" sizes (** not
 measured **); tubes are 1/4" (6.35 mm) OD.
 
-Output: WQCS_fit_test.step (assembly, review only). Overlaps per part are printed.
+Output: WQCS_fit_test.step (assembly incl. lid v2, review only). Overlaps per part are printed.
 Run:  ~/venvs/cad/bin/python CAD/wqcs_fit_test.py
 """
 import os
@@ -34,6 +34,7 @@ import wqcs_case_v2 as case
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ENCLOSURE = os.path.join(HERE, "WQCS_Enclosure_v2.step")
+LID = os.path.join(HERE, "WQCS_Encl_lid_v2.step")   # v1 z; sits LIFT higher on the v2 rim
 SOLENOID = os.path.join(HERE, "Elec Water Valve.step")
 SWITCH_SET = os.path.join(HERE, "Pressure_switch.step")   # solids: 0+1 pressure switch (lower body, clamp/tee), 2 motorized valve
 
@@ -62,7 +63,7 @@ CABLE_SLOT = (-66.95, -28.0)      # x, z: slot x -71.95..-61.95, z -37..-18
 WIRE_END_Y = -14.0                # just past the shared wall (main-PCB standoff at y -11.8)
 
 # ---- component ports (v1 coordinates, from the models) ----
-SW_AXIS = (-116.7, 13.4)          # switch bore along x: y, z
+SW_AXIS = case.PSW_TUBE_AXIS       # switch bore along x: y, z
 SW_X = (-22.75, 9.25)
 BV_AXIS = (-95.9, -14.0)          # ball valve body along x
 BV_X = (-40.42, 5.58)
@@ -209,7 +210,12 @@ def build():
 
 def main():
     enclosure = cq.importers.importStep(ENCLOSURE).val()
+    lid = cq.importers.importStep(LID).val().translate(V(0, 0, case.LIFT))
     parts, fit, tubes, gap = build()
+    lb, eb = lid.BoundingBox(), enclosure.BoundingBox()
+    print("lid x %.2f..%.2f y %.2f..%.2f z %.2f..%.2f; enclosure x %.2f..%.2f y %.2f..; rim z %.2f" % (
+        lb.xmin, lb.xmax, lb.ymin, lb.ymax, lb.zmin, lb.zmax, eb.xmin, eb.xmax, eb.ymin, eb.zmax))
+    print("lid vs enclosure %.2f mm^3 (snap tabs against the rim ridges)" % lid.intersect(enclosure).Volume())
     everything = {**parts, **fit, **tubes}
     print("E1-E2 centre distance leaves %.1f mm of tube between the elbows%s" % (
         gap, "" if gap > 0 else " (overlap: E1 and E2 can't both be collet elbows here)"))
@@ -217,6 +223,9 @@ def main():
     for name, solid in everything.items():
         ov = solid.intersect(enclosure).Volume()
         print("  %-24s %8.2f%s" % (name, ov, "" if ov < 1 or name.startswith("bulkhead") else "  <-- CLASH"))
+        ov = solid.intersect(lid).Volume()
+        if ov > 0.5:
+            print("  %-24s %8.2f  <-- CLASH with the lid" % (name, ov))
     print("overlaps with the components (mm^3), expected joints excluded:")
     expected = {("switch_pin_1", "pressure_switch"), ("switch_pin_2", "pressure_switch"),
                 ("elbow_E5", "solenoid_valve"), ("elbow_E2", "motorized_valve"), ("elbow_E3", "motorized_valve"), ("tube_valve_to_solenoid", "solenoid_valve"),
@@ -230,6 +239,7 @@ def main():
                 print("  %-24s x %-18s %8.2f  <-- CLASH" % (name, comp, ov))
     asm = cq.Assembly()
     asm.add(enclosure, name="enclosure_v2", color=cq.Color(0.75, 0.75, 0.78, 0.6))
+    asm.add(lid, name="lid_v2", color=cq.Color(0.6, 0.65, 0.75, 0.5))
     colors = {"pressure_switch": (0.1, 0.1, 0.1),
               "motorized_valve": (0.1, 0.3, 0.85), "solenoid_valve": (0.85, 0.75, 0.5)}
     for name, solid in parts.items():

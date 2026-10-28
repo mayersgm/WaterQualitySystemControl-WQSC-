@@ -87,10 +87,11 @@ SRC = os.path.join(HERE, "WQCS_Enclosure_v1.step")
 LIFT_Y0, LIFT_Y1 = -200.0, -20.0   # main body; the front section starts at y -20
 SPLIT_Z = 5.5        # band [SPLIT_Z - LIFT, SPLIT_Z] lies in the plain wall band z -0.5..6.0
 LIFT = 4.0           # +4 mm, lying horizontally with the display facing up
-# dia-16 bulkhead holes above SPLIT_Z, kept at their v1 positions:
-# (wall x0, x1, hole centre y, centre z in v1); plain 2 mm wall around both
+# dia-16 bulkhead holes above SPLIT_Z, as in v1: (wall x0, x1, hole centre y, centre z);
+# plain 2 mm wall around both. The lift carries them up; restore_bulkheads() refills
+# them and cuts them at BULKHEADS (below).
 BULKHEAD_D = 16.0
-BULKHEADS = ((-80.511667, -78.511667, -117.0, 14.5), (37.488333, 39.488333, -145.0, 14.5))
+BULKHEADS_V1 = ((-80.511667, -78.511667, -117.0, 14.5), (37.488333, 39.488333, -145.0, 14.5))
 WALL_ADD = 2.0       # outer walls 2 -> 4 mm, grown outward
 WALL_PROBE = 0.3     # depth inside each outer face searched for openings
 LID_SRC = os.path.join(HERE, "WQCS_Encl_lid_v1.step")
@@ -105,6 +106,10 @@ PSW_TOP = -3.5
 PSW_SLOT = (-119.19, -112.31, -30.6)                     # left end wall: y0, y1, from z up
 PSW_WALL = 3.0             # v1: 1.0
 PSW_DROP = 5.0
+PSW_TUBE_AXIS = (-116.7, 13.4)  # y, z (v1) of the switch's tube bore (Pressure_switch.step)
+# final bulkhead holes: the IN (left) hole is on the pressure switch's tube axis
+# (user, 2026-10-25), so the inlet runs straight into the switch; OUT stays at v1
+BULKHEADS = ((*BULKHEADS_V1[0][:2], PSW_TUBE_AXIS[0] - PSW_DROP, PSW_TUBE_AXIS[1]), BULKHEADS_V1[1])
 FRONT_Y0 = -20.0     # display/PCB section: y -20 and beyond
 FRONT_SPLIT_Z = -3.0 # band [FRONT_SPLIT_Z - FRONT_LIFT, FRONT_SPLIT_Z] lies in its plain band z -15..-2
 FRONT_LIFT = 10.0    # inside height 48 -> 58 mm
@@ -140,6 +145,10 @@ COUPON = 35.0                # test coupon side (mm)
 # A standard USB-C plug into the CYD passes over the display section's right wall
 # top (rim z 16.5) with its underside at z ~15.64 (wqcs_display_v2.py prints the
 # plug position), so the rim gets a notch there.
+# TDS probe cable hole: the v1 dia-8 hole in the mechanical section's right wall, above
+# the water outlet, opened to dia 12 (user, 2026-10-27). Its lower edge stays 2 mm above
+# the inside floor (z -41.5). The display section's dia-8 power-jack hole is unchanged.
+TDS_PROBE_HOLE = dict(y=-42.0, z=-33.5, d=12.0, wall_x=(37.49, 41.49))
 USB_RIM_NOTCH = (34.3, 40.0, 24.2 - 7.2, 24.2 + 7.2, 15.0, 16.6)   # x0, x1, y0, y1, z0, z1
 USB_PLUG_ENCL = (27.75, 60.0, 17.99, 30.39, 16.24, 22.74)          # from wqcs_display_v2.py (stack 4.3)
 WALL_OUTER_X = -77.5 - WALL_ADD   # display section left wall outer face
@@ -202,13 +211,13 @@ def lift_region(s, y0, y1, split_z, amount):
 
 
 def restore_bulkheads(s):
-    """Fill the lifted bulkhead holes (z + LIFT) and cut them again at the v1 z."""
+    """Fill the lifted bulkhead holes (v1 z + LIFT) and cut them at their final BULKHEADS positions."""
     pad = 1.0
-    for x0, x1, y, z in BULKHEADS:
-        r = BULKHEAD_D / 2
+    r = BULKHEAD_D / 2
+    for (x0, x1, y, z), (_, _, yn, zn) in zip(BULKHEADS_V1, BULKHEADS):
         s = s.fuse(cq.Solid.makeBox(x1 - x0, BULKHEAD_D + 2 * pad, BULKHEAD_D + 2 * pad,
                                     cq.Vector(x0, y - r - pad, z + LIFT - r - pad)))
-        s = s.cut(cq.Solid.makeCylinder(r, x1 - x0 + 2, cq.Vector(x0 - 1, y, z), cq.Vector(1, 0, 0)))
+        s = s.cut(cq.Solid.makeCylinder(r, x1 - x0 + 2, cq.Vector(x0 - 1, yn, zn), cq.Vector(1, 0, 0)))
     return s.clean().fix()
 
 
@@ -449,7 +458,7 @@ def main():
     print("mechanical section +%.0f mm (band %.2f cm^3)" % (LIFT, band.Volume() / 1000))
     before = v2.Volume()
     v2 = restore_bulkheads(v2)
-    print("bulkhead holes back at v1 z (%+.1f mm^3, expect 0), valid=%s, solids=%d" % (
+    print("bulkhead holes placed (%+.1f mm^3), valid=%s, solids=%d" % (
         v2.Volume() - before, v2.isValid(), len(v2.Solids())))
     v2, band = lift_region(v2, FRONT_Y0, 200.0, FRONT_SPLIT_Z, FRONT_LIFT)
     print("display/PCB section +%.0f mm (band %.2f cm^3), inside height %.0f mm" % (
@@ -468,6 +477,10 @@ def main():
     print("pressure-switch housing: %.0f mm walls, down %.0f mm, outside x %.2f..%.2f y %.2f..%.2f, valid=%s, solids=%d" % (
         PSW_WALL, PSW_DROP, pb.xmin, pb.xmax, pb.ymin, pb.ymax, v2.isValid(), len(v2.Solids())))
     v2, skin, holes = thicken_walls(v2)
+    h = TDS_PROBE_HOLE
+    x0, x1 = h["wall_x"]
+    v2 = v2.cut(cq.Solid.makeCylinder(h["d"] / 2, x1 - x0 + 2, cq.Vector(x0 - 1, h["y"], h["z"]),
+                                      cq.Vector(1, 0, 0))).clean().fix()
     bb = v2.BoundingBox()
     print("outer walls +%.0f mm outward (skin %.1f cm^3, %d openings carried through): %.1f x %.1f mm, valid=%s, solids=%d" % (
         WALL_ADD, skin / 1000, holes, bb.xlen, bb.ylen, v2.isValid(), len(v2.Solids())))
