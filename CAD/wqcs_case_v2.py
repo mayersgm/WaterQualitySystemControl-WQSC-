@@ -149,6 +149,12 @@ COUPON = 35.0                # test coupon side (mm)
 # the water outlet, opened to dia 12 (user, 2026-10-27). Its lower edge stays 2 mm above
 # the inside floor (z -41.5). The display section's dia-8 power-jack hole is unchanged.
 TDS_PROBE_HOLE = dict(y=-42.0, z=-33.5, d=12.0, wall_x=(37.49, 41.49))
+# Power jack (display section's right wall, plain 4 mm there): the v1 dia-8 hole at z -20.5
+# put the jack body on the main PCB's parts, so it moves up to POWER_JACK_BELOW_TOP below the
+# display section's top (rim) (user, 2026-10-27); the old hole is filled. A dia-13 x 18 mm
+# jack body then clears the PCB parts by ~9 mm and the display ring by ~16 mm.
+POWER_JACK_BELOW_TOP = 25.0
+POWER_JACK = dict(y=3.3, z_v1=-20.5, d=8.0, wall_x=(34.549999, 38.55))
 USB_RIM_NOTCH = (34.3, 40.0, 24.2 - 7.2, 24.2 + 7.2, 15.0, 16.6)   # x0, x1, y0, y1, z0, z1
 USB_PLUG_ENCL = (27.75, 60.0, 17.99, 30.39, 16.24, 22.74)          # from wqcs_display_v2.py (stack 4.3)
 WALL_OUTER_X = -77.5 - WALL_ADD   # display section left wall outer face
@@ -481,6 +487,15 @@ def main():
     x0, x1 = h["wall_x"]
     v2 = v2.cut(cq.Solid.makeCylinder(h["d"] / 2, x1 - x0 + 2, cq.Vector(x0 - 1, h["y"], h["z"]),
                                       cq.Vector(1, 0, 0))).clean().fix()
+    j = POWER_JACK
+    x0, x1 = j["wall_x"]
+    jz = RIM_Z_V1 + FRONT_LIFT - POWER_JACK_BELOW_TOP
+    v2 = v2.fuse(_box(x0, x1, j["y"] - j["d"] / 2 - 1, j["y"] + j["d"] / 2 + 1,
+                      j["z_v1"] - j["d"] / 2 - 1, j["z_v1"] + j["d"] / 2 + 1))
+    v2 = v2.cut(cq.Solid.makeCylinder(j["d"] / 2, x1 - x0 + 2, cq.Vector(x0 - 1, j["y"], jz),
+                                      cq.Vector(1, 0, 0))).clean().fix()
+    print("power jack hole z %.1f -> %.1f (%.0f mm below the display top), valid=%s, solids=%d" % (
+        j["z_v1"], jz, POWER_JACK_BELOW_TOP, v2.isValid(), len(v2.Solids())))
     bb = v2.BoundingBox()
     print("outer walls +%.0f mm outward (skin %.1f cm^3, %d openings carried through): %.1f x %.1f mm, valid=%s, solids=%d" % (
         WALL_ADD, skin / 1000, holes, bb.xlen, bb.ylen, v2.isValid(), len(v2.Solids())))
