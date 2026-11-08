@@ -17,9 +17,10 @@ Phase 1 calibration and Phase 6 bench testing against the real containers.
 | 1 gal distiller boiler + cooling system | 1 | Existing design intent (condenser fan) |
 | 2 gal water collection jar | 1 | |
 | 9 gal storage reservoir | 1 | |
-| Motorized valve — water main → boiler | 1 | Doubles as overflow safety shutoff |
-| Motorized valve — collector → reservoir transfer | 1 | |
-| 12V magnetic (solenoid) valve — boiler refill | 1 | Not motorized; DC solenoid, switched via relay/MOSFET same as the other valve outputs |
+| Motorized valve (12V) — water main → boiler | 1 | Doubles as overflow safety shutoff. The only valve held open for the whole run |
+| Booster pump (12V, "100 GPD" 6800-type) — collector → reservoir | 1 | **Changed 2026-11-07** (replaces the motorized transfer valve). Own 12V supply and own pressure (demand) switch; **no Pico control line** |
+| 12V N/C solenoid valve — transfer (DIGITEN 1/4" RO inlet valve) | 1 | Downstream of the booster pump, on the old transfer-valve output. Opening it drops line pressure and the pump starts; closing it stops the pump. Open only during a transfer (2-3 gal) |
+| 12V magnetic (solenoid) valve — boiler refill | 1 | Not motorized; DC solenoid, switched via an opto-isolated MOSFET module, same as the other valve outputs |
 | Boiler drain valve | 1 | **Manual valve, no Pico control** — hand-operated, used only when cleaning the distiller |
 | Boiler power relay/receptacle | 1 | |
 | TDS sensor — TDS-1 | 1 | Inline, distiller output → collector |
@@ -48,7 +49,7 @@ the 3 analog signals needed (thermistor, TDS-1, TDS-2).
 | Reservoir scale HX711 SCK | GP7 | Digital out |
 | Main supply valve (motorized, overflow shutoff) | GP10 | Digital out (relay) |
 | Boiler refill solenoid (12V magnetic valve) | GP11 | Digital out (relay/MOSFET, DC coil) |
-| Transfer valve (motorized, collector → reservoir) | GP12 | Digital out (relay) |
+| Transfer solenoid (12V N/C, behind the booster pump) | GP12 | Digital out (opto-MOSFET module) |
 | Boiler power relay | GP13 | Digital out (relay) |
 | Pressure switch (main ↔ refill segment) | GP14 | Digital in, pull-up |
 | Onboard LED (core-0 heartbeat) | GP25 | Digital out |
@@ -126,7 +127,7 @@ unchanged values. `PicoLink` routes these lines to `last_limits`, not
  "heater":1,
  "fault":{"tds1":false,"overflow":false,"refill_timeout":false,"valve_stuck":false,
           "collector_overflow":false,"reservoir_overflow":false,"transfer_leak":false,
-          "controller":false},
+          "transfer_stall":false,"controller":false,"sensor":false},
  "alert":{"tds2":false}}
 ```
 Fill percentages aren't sent. The HMI computes them from `*_g` and the vessel
@@ -170,9 +171,12 @@ does the actual metering/on-off. The main valve force-closes on any of:
 - refill timeout (refill valve stuck open past its failsafe cap)
 - **refill solenoid stuck** (see below — cross-checked via the pressure switch)
 - the `STANDBY` condition (collector at/above FULL)
-- collector overflow (fixed ceiling — e.g. transfer valve stuck closed)
+- collector overflow (fixed ceiling — e.g. transfer valve stuck closed or pump dead)
 - reservoir overflow (fixed ceiling — e.g. transfer valve stuck open)
-- transfer leak: with the transfer closed, the collector drops ≥300 g from its peak **and** the reservoir rises ≥150 g from its low point (weight-based, no timing, since gravity flow can be arbitrarily slow)
+- transfer stall: with the transfer open, the collector hasn't dropped
+  `TRANSFER_STALL_DROP_G` (100 g) within `TRANSFER_STALL_S` (180 s) of the last
+  progress mark (pump dead, valve not opening, blocked line, empty pickup)
+- transfer leak: with the transfer closed, the collector drops ≥300 g from its peak **and** the reservoir rises ≥150 g from its low point (weight-based)
 
 All are checked every loop, independent of the normal fill/transfer state
 machine, same as the other safety interlocks in Phase 5. The heater is
@@ -248,13 +252,29 @@ value — **must revert to 300 before real deployment**, tracked for Phase 6).
   replaced the old reservoir LOW trigger, which left a gap: with the reservoir
   between LOW and FULL, a full collector neither transferred nor paused
   production, and could overflow.
-- The transfer is **blocked** while TDS-1, reservoir-overflow or transfer-leak
+- The transfer is **blocked** while TDS-1, reservoir-overflow, transfer-leak or transfer-stall
   faults are latched, so suspect distillate or a suspect valve never moves water
   into the reservoir. A collector overflow does not block it, since transferring
   relieves the collector.
-- All protection is weight-based, not timed, because the transfer is gravity-fed
-  and can be arbitrarily slow. Stuck-closed shows up as a collector overflow;
-  stuck-open shows up as a transfer leak or a reservoir overflow.
+- **Pumped transfer (changed 2026-11-07).** The transfer was originally a
+  gravity-fed motorized valve, so all protection was weight-based and untimed.
+  It is now a 12V booster pump (own supply and pressure switch) feeding a 12V
+  N/C solenoid on the transfer output, so the flow is fast enough to time. A
+  stuck-closed valve or dead pump now shows up as a **transfer stall** (open,
+  but the collector isn't dropping) long before a collector overflow;
+  stuck-open still shows up as a transfer leak or a reservoir overflow. The
+  stall fault closes the valve, which also stops the pump running dry.
+  `TRANSFER_STALL_DROP_G`/`TRANSFER_STALL_S` are provisional until a real
+  transfer is timed.
+- **Collector EMPTY must sit above the pump inlet**, so the valve closes before
+  the pump can draw air.
+- **Solenoid coil heating (open question).** A 2-3 gal transfer keeps the
+  solenoid energized for roughly 8-45 min, depending on the pump's real flow.
+  Measure the coil temperature on a real transfer first. If it runs too hot,
+  options are a PWM hold after pull-in (the opto-MOSFET module can do it at
+  about 200-1000 Hz, with a flyback diode across the coil and a drive that
+  respects the active-low opto input), a continuous-duty valve, or
+  firmware open/rest cycling.
 - Covered by host tests in `tests/test_control.py`, which run the real
   `Pico/main.py` control step against scripted weights.
 

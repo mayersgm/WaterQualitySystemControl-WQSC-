@@ -110,5 +110,23 @@ Useful while testing:
   "STANDBY - no room", push "reservoir full" after about 3 s. The routine
   "STANDBY - transferring" never pushes.
 
+## Later: pumped transfer (needs the booster pump and transfer solenoid plumbed)
+The pump and solenoid replaced the motorized transfer valve on 2026-11-07.
+- [ ] **Flow and coil heat, firmware out of the loop.** Put the system in
+  STOP. Fill the collector with 2-3 gal and note its weight on the touchscreen.
+  Power the transfer solenoid straight from 12 V (not from the board) and
+  start a stopwatch; the pump should start on its own. Every 5 min, note the
+  collector weight and the coil temperature (IR thermometer, or touch). Cut
+  the 12 V before the collector runs dry.
+- **Record**: total time, grams moved, so flow in g/s (rated "100 GPD" is about
+  4.4 g/s), and the coil temperature curve. Give these to Claude: the flow
+  sets `TRANSFER_STALL_DROP_G`/`TRANSFER_STALL_S` and the collector EMPTY
+  margin. A coil that keeps climbing past about 70 °C means a PWM hold or a
+  different valve.
+- [ ] **Transfer stall fault**: in START with a transfer running, pinch the
+  line or unplug the pump's supply. After about 3 min: fault "XFER STALL",
+  transfer valve closed, push "Transfer not flowing (pump/valve)". Restore it,
+  then ACK; the transfer resumes.
+
 ## Notes while running
 Record the date, the result and anything unexpected next to each test.

@@ -93,11 +93,50 @@ class ControlTest(unittest.TestCase):
     def test_transfer_runs_until_collector_empty(self):
         self.set(collector=520, reservoir=100)
         self.assertEqual(self.step()["valves"]["transfer"], 1)
-        self.set(collector=300, reservoir=320)       # gravity, slow: still open
+        self.set(collector=300, reservoir=320)       # pumping: still open
         self.assertEqual(self.step()["valves"]["transfer"], 1)
         self.set(collector=80, reservoir=540)
         self.assertEqual(self.step()["valves"]["transfer"], 0)
         self.assertEqual(self.faults(), set())       # a normal transfer isn't a leak
+
+    # -- stall check: pumped transfer open but the collector isn't dropping --
+    def test_transfer_that_does_not_flow_faults_and_closes(self):
+        clock = self.main.time
+        self.set(collector=520, reservoir=100)
+        self.assertEqual(self.step()["valves"]["transfer"], 1)
+        clock.now += self.main.TRANSFER_STALL_S * 1000 + 1   # pump dead: no drop
+        s = self.step()
+        self.assertIn("transfer_stall", self.faults())
+        self.assertEqual((s["valves"]["transfer"], s["heater"], s["state"]), (0, 0, "FAULT"))
+
+    def test_slow_but_steady_transfer_does_not_stall(self):
+        clock = self.main.time
+        self.set(collector=800, reservoir=100)
+        self.step()
+        for g in (690, 580, 470, 360, 250):          # 110 g per window: progressing
+            clock.now += self.main.TRANSFER_STALL_S * 1000 - 1000
+            self.set(collector=g)
+            self.assertEqual(self.step()["valves"]["transfer"], 1)
+        self.assertNotIn("transfer_stall", self.faults())
+
+    def test_stall_check_disarmed_while_valve_closed(self):
+        clock = self.main.time
+        self.set(collector=300, reservoir=100)       # below FULL: no transfer
+        self.step()
+        clock.now += self.main.TRANSFER_STALL_S * 1000 * 3
+        self.step()
+        self.assertNotIn("transfer_stall", self.faults())
+
+    def test_ack_after_stall_rearms_from_now(self):
+        clock = self.main.time
+        self.set(collector=520, reservoir=100)
+        self.step()
+        clock.now += self.main.TRANSFER_STALL_S * 1000 + 1
+        self.step()
+        self.w._handle_command("ACK")
+        s = self.step()                              # transfer reopens, fresh window
+        self.assertNotIn("transfer_stall", self.faults())
+        self.assertEqual(s["valves"]["transfer"], 1)
 
     # -- overflow faults (valve stuck closed / open) --
     def test_collector_overflow_stops_distillation(self):

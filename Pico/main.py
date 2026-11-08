@@ -18,8 +18,8 @@ UART_BAUD = 9600       # bench wiring can't reliably carry 115200 -- see Phase0_
 # BENCH TEST PINS (spare WQCS PCB, fixed screw-terminal wiring) -- revert to
 # the production pin map (GP10/11/12/13/14) before real deployment (Phase 6).
 class ActiveLowOutput:
-    """Output for an opto-isolated relay module (817C input stage: LED anode
-    to VCC through 1k, cathode to IN), which energizes when IN is pulled LOW.
+    """Output for an opto-isolated MOSFET module (817C input stage: LED anode
+    to VCC through 1k, cathode to IN), which switches on when IN is pulled LOW.
     Open-drain so "off" releases the pin rather than driving it high, which
     could still leak through the opto LED if the module's VCC is 5V. value()
     takes/returns the logical state (1 = on/energized), like a plain Pin."""
@@ -35,9 +35,14 @@ class ActiveLowOutput:
         self._pin.value(0 if self._on else 1)
 
 
-MAIN_VALVE = ActiveLowOutput(19)      # motorized, water main -> boiler, overflow shutoff
+MAIN_VALVE = ActiveLowOutput(19)      # 12V motorized, water main -> boiler, overflow shutoff;
+                                      # the only valve held open for the whole run
 REFILL_VALVE = ActiveLowOutput(18)    # 12V solenoid, boiler refill (bench PCB: legacy GP18, DVM-confirmed 2026-09-26)
-TRANSFER_VALVE = ActiveLowOutput(21)  # motorized, collector -> reservoir
+TRANSFER_VALVE = ActiveLowOutput(21)  # 12V N/C solenoid, collector -> reservoir. A booster
+                                      # pump with its own 12V supply and pressure switch sits
+                                      # upstream: opening this valve drops the line pressure and
+                                      # starts the pump, closing it stops the pump. The Pico never
+                                      # switches the pump directly.
 BOILER_RELAY = Pin(16, Pin.OUT)
 # Pressure switch in the segment between the main valve and the refill
 # solenoid: when the solenoid is (actually) closed, blocked water builds
@@ -78,17 +83,27 @@ RESERVOIR_CAPACITY_G = 34065
 # BENCH TEST VALUES (only ~1-2kg of reference weight available) -- revert
 # every value marked "prod:" to the production number before Phase 6.
 BOILER_OVERFLOW_G = 900        # prod: 3700 -- hard safety cutoff, above any FULL setpoint
-COLLECTOR_OVERFLOW_G = 900     # prod: 7400 -- catches a transfer valve stuck closed
+COLLECTOR_OVERFLOW_G = 900     # prod: 7400 -- catches a transfer that never happens (valve/pump)
 RESERVOIR_OVERFLOW_G = 1200    # prod: 33500 -- catches a transfer valve stuck open
 DRY_TANK_FLOOR_G = 200         # heater never runs below this boiler weight
 REFILL_TIMEOUT_S = 90          # prod: 300 (10 for the step-6 timeout test)
 
-# Transfer-valve leak check (no timing -- gravity flow can be arbitrarily
-# slow). With the transfer closed the collector can only gain weight and the
+# Transfer-valve leak check (weight-based). With the transfer closed the
+# collector can only gain weight and the
 # reservoir can only gain by leaking, so a drop from the collector's peak AND
 # a rise from the reservoir's low point since closing means it's passing water.
 LEAK_DROP_G = 300
 LEAK_RISE_G = 150
+
+# Transfer stall check: the transfer is pumped (booster pump behind the
+# solenoid), so while the valve is open the collector must keep dropping.
+# If it hasn't fallen TRANSFER_STALL_DROP_G since the last progress mark
+# within TRANSFER_STALL_S, the pump/valve/line has failed (dead pump, blown
+# fuse, valve not opening, blocked tube, empty pickup) -- close the valve,
+# which also stops the pump running dry. PROVISIONAL: the rated "100 GPD"
+# (~4.4 g/s) is a membrane rating; set these from a measured transfer.
+TRANSFER_STALL_DROP_G = 100
+TRANSFER_STALL_S = 180
 
 # Default fill/drain setpoints, used until the operator changes them from the
 # HMI (SET:...), which persists them to limits.json -- see limits.py.
@@ -103,6 +118,7 @@ DEFAULT_LIMITS = {
 
 FAULT_KEYS = ("tds1", "overflow", "refill_timeout", "valve_stuck",
               "collector_overflow", "reservoir_overflow", "transfer_leak",
+              "transfer_stall",  # transfer open but the collector isn't dropping
               "controller",   # control loop raised or stalled (see loop_once/supervise)
               "sensor")       # SENSOR_FAIL_PASSES consecutive failed sensor reads
 
@@ -180,6 +196,9 @@ class Wqcs:
         # leak-check references, re-armed whenever the transfer valve closes
         self._leak_ref_collector = None
         self._leak_ref_reservoir = None
+        # stall-check progress mark, armed while the transfer valve is open
+        self._stall_ref_g = None
+        self._stall_ref_ms = 0
 
         # Recoverable faults (need ACK/RESET to clear). Any latched fault stops
         # distillation: main valve closed, refill and heater off.
@@ -305,6 +324,21 @@ class Wqcs:
                    reservoir_g - self._leak_ref_reservoir >= LEAK_RISE_G)
         return self._db_transfer_leak.check(leaking)
 
+    def _check_transfer_stall(self, collector_g):
+        """True if the transfer has been open TRANSFER_STALL_S without the
+        collector dropping TRANSFER_STALL_DROP_G from the last progress mark.
+        Judged on the valve state applied last pass (what is really open)."""
+        if not self.transfer_active:
+            self._stall_ref_g = None
+            return False
+        now = time.ticks_ms()
+        if (self._stall_ref_g is None
+                or collector_g <= self._stall_ref_g - TRANSFER_STALL_DROP_G):
+            self._stall_ref_g = collector_g
+            self._stall_ref_ms = now
+            return False
+        return time.ticks_diff(now, self._stall_ref_ms) > TRANSFER_STALL_S * 1000
+
     def _clear_faults(self):
         for k in self.faults:
             self.faults[k] = False
@@ -404,8 +438,7 @@ class Wqcs:
         collector_empty = self._db_collector_empty.check(collector_g <= lim["collector_empty"])
         reservoir_full = self._db_reservoir_full.check(reservoir_g >= lim["reservoir_full"])
         # Capacity rule: a transfer only starts if the reservoir can take the
-        # collector's entire contents (gravity flow may be slow, so this is
-        # decided by weight up front rather than by timing the transfer).
+        # collector's entire contents, decided by weight up front.
         fits = collector_g + reservoir_g <= lim["reservoir_full"]
         transfer_fits = self._db_transfer_fits.check(fits)
         tds1_bad = self._db_tds1_fault.check(tds1_ppm >= TDS_FAULT_PPM)
@@ -422,11 +455,13 @@ class Wqcs:
             self.faults["tds1"] = True
         if self._check_transfer_leak(collector_g, reservoir_g):
             self.faults["transfer_leak"] = True
+        if self._check_transfer_stall(collector_g):
+            self.faults["transfer_stall"] = True
         self.alert_tds2 = tds2_bad  # non-latching, informational only
         any_fault = any(self.faults.values())
 
         # STANDBY: the collector is at/above FULL, whatever the reservoir holds
-        # (little headroom above FULL, and a gravity transfer can be slow).
+        # (little headroom above FULL, and a 2-3 gal transfer takes minutes).
         # Production pauses; if the whole collector fits in the reservoir the
         # transfer drains it meanwhile, and production resumes once the
         # collector drops below FULL. If it doesn't fit, STANDBY holds until
@@ -478,10 +513,10 @@ class Wqcs:
 
         # ---- collector -> reservoir transfer, gated on system being active --
         # Blocked while the collector may hold bad water (TDS-1) or the
-        # transfer path itself is suspect (leak / reservoir overflow). A
+        # transfer path itself is suspect (leak / stall / reservoir overflow). A
         # collector overflow does NOT block it: transferring relieves it.
         blocked = (self.faults["tds1"] or self.faults["transfer_leak"]
-                   or self.faults["reservoir_overflow"])
+                   or self.faults["transfer_stall"] or self.faults["reservoir_overflow"])
         if (not self.transfer_active and active and not blocked
                 and collector_full and transfer_fits):
             self.transfer_active = True

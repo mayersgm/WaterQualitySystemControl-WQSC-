@@ -76,7 +76,7 @@ background:#263445;font-size:15px;opacity:0;transition:opacity .3s;pointer-event
 const TDS_FAULT = 50, TDS_WARN = 40;
 const FAULTS = {tds1:"TDS-1", overflow:"BOILER OVFL", refill_timeout:"REFILL T/O",
   valve_stuck:"VALVE STUCK", collector_overflow:"COLL OVFL", reservoir_overflow:"RES OVFL",
-  transfer_leak:"XFER LEAK", controller:"CTRL STALL", sensor:"SENSOR"};
+  transfer_leak:"XFER LEAK", transfer_stall:"XFER STALL", controller:"CTRL STALL", sensor:"SENSOR"};
 const STATES = {RUN:["green","RUN - distilling"], IDLE:["blue","IDLE - filling boiler"],
   STANDBY:["amber","STANDBY - no room"], STOPPED:["grey","STOPPED"],
   EMPTY:["teal","EMPTY - drain mode"], FAULT:["red","FAULT"]};
