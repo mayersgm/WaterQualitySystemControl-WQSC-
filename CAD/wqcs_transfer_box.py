@@ -24,6 +24,8 @@ Method (inputs are the finished v2 parts, so run wqcs_case_v2.py first):
     - Solenoid power connector: a CONN_D hole in the left wall, in line
       below the IN bulkhead (same z) at the solenoid's mid-length, with a
       CONN_CB_D x CONN_CB_DEPTH counterbore so the shallow connector's nut seats.
+    - Pump <-> pressure switch wires (2026-11-16): a 6 x 12 slot in the left
+      wall below the IN bulkhead, in line with the switch's wire exit.
 
 Where to cut: the new end wall's inner face is at INNER_Y (default -84, the
 old ball-valve shelf's underside). The tube fittings that joined the switch to
@@ -75,6 +77,13 @@ CONN_CB_D = 13.0
 CONN_CB_DEPTH = 1.5
 CONN_CB_SIDE = "outside"   # "outside" (flange recessed) or "inside" (nut recessed)
 LEFT_WALL_X = (-82.51, -78.51)
+# pump <-> pressure switch wires (user, 2026-11-16): SW_SLOT_W x SW_SLOT_H slot (rounded
+# ends) in the left wall, on the switch's wire-exit line (centre of the housing's
+# left-end slot) and just below the IN bulkhead, clear of its dia-24 nuts (z >= 1.4)
+SW_SLOT_W = 6.0            # along y
+SW_SLOT_H = 12.0           # along z
+SW_SLOT_Y = (case.PSW_SLOT[0] + case.PSW_SLOT[1]) / 2 - case.PSW_DROP   # -120.75
+SW_SLOT_ZC = -12.0         # z -18..-6, between the switch pins (z -9.6, -25.6) and the nut
 
 V = cq.Vector
 
@@ -107,6 +116,17 @@ def keyholes(b):
     return b.clean().fix()
 
 
+def switch_slot(b):
+    x0, x1 = LEFT_WALL_X
+    r = SW_SLOT_W / 2
+    L = x1 - x0 + 2
+    cut = _box(x0 - 1, x1 + 1, SW_SLOT_Y - r, SW_SLOT_Y + r, SW_SLOT_ZC - SW_SLOT_H / 2 + r,
+               SW_SLOT_ZC + SW_SLOT_H / 2 - r)
+    for z in (SW_SLOT_ZC - SW_SLOT_H / 2 + r, SW_SLOT_ZC + SW_SLOT_H / 2 - r):
+        cut = cut.fuse(cq.Solid.makeCylinder(r, L, V(x0 - 1, SW_SLOT_Y, z), V(1, 0, 0)))
+    return b.cut(cut).clean().fix()
+
+
 def drain(b):
     x0, x1, z0, z1 = BOTTOM_SLOT
     b = b.fuse(_box(x0, x1, BOTTOM_Y, BOTTOM_Y + WALL_T, BACK_OUT_Z, z1)).clean()
@@ -129,7 +149,7 @@ def box():
     b = cut_and_close(v2)
     # fill the mirrored solenoid screw holes and floor slot (the new end stays solid)
     b = b.fuse(_box(bb.xmin, bb.xmax, INNER_Y, OUTER_Y, bb.zmin, bb.zmax)).clean()
-    return connector_hole(drain(keyholes(b)))
+    return switch_slot(connector_hole(drain(keyholes(b))))
 
 
 def lid():
