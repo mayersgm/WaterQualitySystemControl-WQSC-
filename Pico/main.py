@@ -15,8 +15,9 @@ UART_TX_PIN = 0
 UART_RX_PIN = 1
 UART_BAUD = 9600       # bench wiring can't reliably carry 115200 -- see Phase0_Design.md
 
-# BENCH TEST PINS (spare WQCS PCB, fixed screw-terminal wiring) -- revert to
-# the production pin map (GP10/11/12/13/14) before real deployment (Phase 6).
+# Pin map for the full mechanical system (real valves + pressure switch) on the
+# WQCS PCB, as of 2026-11-25. Supersedes the old draft production map
+# (GP10-14) in Phase0_Design.md sec 2.
 class ActiveLowOutput:
     """Output for an opto-isolated MOSFET module (817C input stage: LED anode
     to VCC through 1k, cathode to IN), which switches on when IN is pulled LOW.
@@ -37,36 +38,33 @@ class ActiveLowOutput:
 
 MAIN_VALVE = ActiveLowOutput(19)      # 12V motorized, water main -> boiler, overflow shutoff;
                                       # the only valve held open for the whole run
-REFILL_VALVE = ActiveLowOutput(18)    # 12V solenoid, boiler refill (bench PCB: legacy GP18, DVM-confirmed 2026-09-26)
+REFILL_VALVE = ActiveLowOutput(18)    # 12V N/C solenoid, boiler refill (bench PCB: legacy GP18, DVM-confirmed 2026-09-26)
 TRANSFER_VALVE = ActiveLowOutput(21)  # 12V N/C solenoid, collector -> reservoir. A booster
                                       # pump with its own 12V supply and pressure switch sits
                                       # upstream: opening this valve drops the line pressure and
                                       # starts the pump, closing it stops the pump. The Pico never
                                       # switches the pump directly.
-BOILER_RELAY = Pin(16, Pin.OUT)
+BOILER_RELAY = Pin(11, Pin.OUT)       # reassigned 2026-11-25 (was GP16) for the full mechanical system
 # Pressure switch in the segment between the main valve and the refill
 # solenoid: when the solenoid is (actually) closed, blocked water builds
 # static pressure there and the switch trips; when the solenoid is (actually)
 # open, flow relieves that pressure. Only meaningful while the main valve is
 # open -- see the stuck-valve cross-check in _control_step.
-PRESSURE_SW = Pin(11, Pin.IN, Pin.PULL_UP)
-PRESSURE_SW_ACTIVE_HIGH = False  # bench sim relay polarity (GP10/PRESSURE_SIM_RELAY) confirmed 2026-09-27 -- re-verify against the real switch in Phase 6
+PRESSURE_SW = Pin(13, Pin.IN, Pin.PULL_UP)  # real switch, reassigned 2026-11-25 (was GP11 fed by the bench sim relay)
+PRESSURE_SW_ACTIVE_HIGH = True   # N/C switch to GND: pressure pushes the contacts apart, pull-up reads HIGH
+                                 # (per user 2026-11-26 -- confirm in the in-circuit test). A broken wire
+                                 # also reads HIGH ("pressure"), which trips the stuck-closed check
+                                 # while refilling -- fails toward a fault, not silence.
 
-# BENCH-ONLY SIMULATION -- there is no real pressure switch on the bench yet.
-# GP10 drives a second, directly-wired (active-high, not opto) relay whose
-# COM feeds GP11/PRESSURE_SW, standing in for a real switch's back-pressure
-# signal. It must be pulsed in lockstep with the real refill solenoid (GP18)
-# below. Remove PRESSURE_SIM_RELAY and this sync entirely once a real
-# pressure switch is wired for Phase 6 -- production reads PRESSURE_SW from
-# genuine hardware, nothing drives it from firmware.
-PRESSURE_SIM_RELAY = Pin(10, Pin.OUT, value=0)
+# GP16 (I2C0 SDA) / GP17 (I2C0 SCL) RESERVED for an SHT31 temp/humidity sensor
+# (not in hand yet) -- temperature source for TDS compensation. Do not assign.
 LED = Pin(25, Pin.OUT)             # core-0 heartbeat
 
 
 
 def all_outputs_off():
     """Fail-safe: heater off, every valve closed. Safe to call from either core."""
-    for pin in (MAIN_VALVE, REFILL_VALVE, TRANSFER_VALVE, BOILER_RELAY, PRESSURE_SIM_RELAY):
+    for pin in (MAIN_VALVE, REFILL_VALVE, TRANSFER_VALVE, BOILER_RELAY):
         pin.value(0)
 
 
@@ -487,7 +485,6 @@ class Wqcs:
                 self.refill_open = False
                 self.refill_started_at = None
         REFILL_VALVE.value(1 if self.refill_open else 0)
-        PRESSURE_SIM_RELAY.value(1 if self.refill_open else 0)  # BENCH-ONLY, see note above
 
         # ---- stuck-solenoid cross-check via the pressure switch --------------
         # Only meaningful with the main valve actually open (source pressure

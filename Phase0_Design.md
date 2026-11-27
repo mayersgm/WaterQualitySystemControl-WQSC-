@@ -29,7 +29,26 @@ Phase 1 calibration and Phase 6 bench testing against the real containers.
 | Distribution pump (self-contained, pressure-activated) | 1 | Own pressure switch/power — **no Pico control line** |
 | Pressure switch — main valve ↔ refill solenoid segment | 1 | Detects stuck-open/stuck-closed refill solenoid by reading back-pressure in the segment between the two valves (see §4) |
 
-## 2. Pico pin map (draft)
+## 2. Pico pin map
+
+> **Current wiring (2026-11-25, full mechanical system on the WQCS PCB)** —
+> this is what `Pico/main.py` uses; the draft GP10-14 assignments in the table
+> below and the bench table in §6 are superseded:
+>
+> | Function | GPIO |
+> |---|---|
+> | Main supply valve | GP19 |
+> | Boiler refill solenoid | GP18 |
+> | Transfer solenoid | GP21 |
+> | Boiler power relay | **GP11** |
+> | Pressure switch (real, pull-up) | **GP13** |
+> | SHT31 temp/humidity (I2C0 SDA / SCL) — reserved, sensor not in hand; temperature for TDS compensation | **GP16 / GP17** |
+> | Bench pressure-sim relay (GP10) | removed |
+>
+> UART (GP0/1), scales (GP2-7), thermistor/TDS (GP26-28) and LED (GP25) unchanged.
+> Containers remain 1 gal for the final simulation before installation.
+
+Original draft:
 
 Only 3 true ADC-capable pins exist on the Pico (GP26-28) — they map exactly to
 the 3 analog signals needed (thermistor, TDS-1, TDS-2).
